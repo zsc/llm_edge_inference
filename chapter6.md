@@ -28,6 +28,12 @@ $$y = \tilde{W} \tilde{x} + b$$
 
 关键观察：虽然计算结果不变，但 $\tilde{W}$ 和 $\tilde{x}$ 的分布可能比原始的 $W$ 和 $x$ 更适合量化。
 
+**深入理解旋转变换的几何意义**
+
+从几何角度看，旋转变换保持了向量的范数但改变了其在各维度上的分布。考虑一个简单的2D例子：如果原始向量 $x = [100, 1]^T$，经过45度旋转后变为 $\tilde{x} \approx [70.7, 71.4]^T$，各维度的值更加均衡，这对量化更友好。
+
+在高维空间中，这种效应更加显著。根据概率论中的集中现象（concentration phenomenon），高维随机向量经过随机旋转后，其各分量趋向于具有相似的幅度，这正是我们期望的量化友好分布。
+
 **量化误差分析**
 
 设量化函数为 $Q(\cdot)$，量化误差为：
@@ -40,6 +46,26 @@ $$\epsilon_{direct} = Q(W)Q(x) - Wx = W\epsilon_x + \epsilon_W x + \epsilon_W \e
 $$\epsilon_{rot} = Q(\tilde{W})Q(\tilde{x}) - \tilde{W}\tilde{x} = \tilde{W}\epsilon_{\tilde{x}} + \epsilon_{\tilde{W}} \tilde{x} + \epsilon_{\tilde{W}} \epsilon_{\tilde{x}}$$
 
 通过选择合适的旋转矩阵 $R$，可以使 $\|\epsilon_{\tilde{W}}\|$ 和 $\|\epsilon_{\tilde{x}}\|$ 更小。
+
+**误差传播的谱分析**
+
+更深入地，我们可以通过谱分析来理解旋转如何影响误差传播。设 $W$ 的奇异值分解为 $W = U\Sigma V^T$，则：
+$$\tilde{W} = WR = U\Sigma V^T R = U\Sigma \tilde{V}^T$$
+
+其中 $\tilde{V} = R^T V$。旋转不改变奇异值 $\Sigma$，但改变了右奇异向量。量化误差在不同奇异值方向上的投影为：
+$$\epsilon_{proj,i} = \sigma_i \langle v_i, \epsilon_x \rangle$$
+
+通过选择 $R$ 使得量化误差主要集中在小奇异值对应的方向上，可以减少误差对输出的影响。
+
+**最优旋转矩阵的选择准则**
+
+理论上，最优旋转矩阵应该最小化量化后的重构误差：
+$$R^* = \arg\min_R \mathbb{E}[\|Q(WR)Q(R^Tx) - Wx\|^2]$$
+
+这是一个非凸优化问题，但可以通过以下启发式方法近似求解：
+1. 最小化激活值的动态范围：$\min_R \max_i |\tilde{x}_i| - \min_i |\tilde{x}_i|$
+2. 最大化量化利用率：$\max_R \sum_i H(\tilde{x}_i)$，其中 $H$ 是熵函数
+3. 平衡各通道的量化误差方差：$\min_R \text{Var}[\epsilon_{\tilde{x},i}]$
 
 ### 6.1.2 Hadamard变换与随机旋转
 
@@ -56,6 +82,14 @@ $$H_{2n} = \frac{1}{\sqrt{2}}\begin{pmatrix} H_n & H_n \\ H_n & -H_n \end{pmatri
 Hadamard变换的优势：
 - 计算复杂度仅为 $O(n \log n)$（通过快速Hadamard变换）
 - 能有效地将稀疏激活值分散到所有维度
+- 硬件友好：只需要加减操作，无需乘法
+
+**Hadamard变换的频域解释**
+
+Hadamard变换可以视为一种特殊的频域变换。与傅里叶变换类似，它将信号分解为不同的"频率"成分，但使用的是方波基函数而非正弦波。这种特性使得：
+- 局部化的异常值（对应高频）被分散到多个系数
+- 全局趋势（对应低频）保持相对集中
+- 量化噪声在逆变换时被平均化，减少了局部影响
 
 **2. 随机正交矩阵**
 
@@ -67,12 +101,51 @@ Hadamard变换的优势：
 随机旋转的理论保证：根据Johnson-Lindenstrauss引理的推广，随机投影能以高概率保持向量间的内积：
 $$\mathbb{P}[|(Rx)^T(Ry) - x^T y| > \epsilon \|x\|\|y\|] < 2\exp(-cn\epsilon^2)$$
 
+**改进的随机旋转方法**
+
+除了基本的高斯随机矩阵，还有几种更高效的构造方法：
+
+1. **Givens旋转的组合**：
+   通过一系列2D旋转构造高维旋转：
+   $$R = \prod_{i<j} G_{ij}(\theta_{ij})$$
+   其中 $G_{ij}$ 是只在第 $i,j$ 维进行旋转的Givens矩阵。
+   优势：可以精确控制旋转角度，计算效率高。
+
+2. **随机置换+Hadamard**：
+   $$R = PH$$
+   其中 $P$ 是随机置换矩阵，$H$ 是Hadamard矩阵。
+   这种组合既保持了Hadamard的计算效率，又增加了随机性。
+
+3. **蝶形变换（Butterfly Transform）**：
+   受FFT启发的结构化正交变换：
+   $$R = \prod_{i=1}^{\log n} B_i D_i$$
+   其中 $B_i$ 是蝶形矩阵，$D_i$ 是对角矩阵。
+   复杂度仅 $O(n \log n)$，且可以学习最优参数。
+
+**旋转矩阵的条件数分析**
+
+一个关键考虑是旋转后矩阵的条件数变化。设原始矩阵 $W$ 的条件数为 $\kappa(W) = \sigma_{max}/\sigma_{min}$，旋转后：
+$$\kappa(\tilde{W}) = \kappa(WR) = \kappa(W)$$
+
+虽然条件数不变，但量化后的条件数会改变：
+$$\kappa(Q(\tilde{W})) \neq \kappa(Q(W))$$
+
+实验表明，适当的旋转可以使量化后的条件数更接近原始值，从而保持数值稳定性。
+
 ### 6.1.3 激活值分布的均匀化
 
 LLM中的激活值通常具有以下特征：
 1. **异常值（outliers）**：某些维度的值远大于其他维度
 2. **稀疏性**：许多维度接近零
 3. **非均匀分布**：不同通道的值域差异很大
+4. **长尾分布**：少数激活值占据了大部分的能量
+
+**激活值异常的根源分析**
+
+深入研究表明，LLM中的激活异常主要源于：
+1. **LayerNorm的累积效应**：在深层网络中，LayerNorm虽然规范化了整体分布，但可能放大某些特定模式
+2. **注意力机制的稀疏性**：某些token可能获得极高的注意力权重，导致对应的激活值异常大
+3. **残差连接的累积**：多层残差连接可能导致某些特征不断被强化
 
 **旋转后的分布改善**
 
@@ -83,12 +156,44 @@ $$\text{Var}[\tilde{x}_i] = \frac{1}{n}\sum_{j=1}^n \sigma_j^2$$
 
 即所有维度的方差趋于平均，这种均匀化效应极大地改善了量化性能。
 
+**更精确的分布分析**
+
+考虑激活值的四阶矩（峰度），它衡量分布的尾部特性：
+$$\text{Kurt}[x_i] = \frac{\mathbb{E}[(x_i - \mu_i)^4]}{\sigma_i^4} - 3$$
+
+经过旋转变换后，峰度也会被"平均化"：
+$$\text{Kurt}[\tilde{x}_i] \approx \frac{1}{n}\sum_{j=1}^n \text{Kurt}[x_j] + O(1/n)$$
+
+这意味着极端值的影响被显著降低。
+
 **异常值处理**
 
 设 $x$ 中第 $k$ 维是异常值，$|x_k| \gg |x_i|, i \neq k$。经过Hadamard变换后：
 $$\tilde{x}_i = \frac{1}{\sqrt{n}}\sum_{j=1}^n H_{ij} x_j$$
 
 异常值 $x_k$ 的影响被分散到所有 $n$ 个维度，每个维度只承担 $x_k/\sqrt{n}$ 的贡献。
+
+**自适应异常值检测与处理**
+
+一种改进的方法是在旋转前先检测并特殊处理异常值：
+1. **异常值检测**：使用MAD（Median Absolute Deviation）方法：
+   $$\text{MAD} = \text{median}(|x_i - \text{median}(x)|)$$
+   异常值定义为：$|x_i - \text{median}(x)| > k \cdot \text{MAD}$，典型地 $k=3$
+
+2. **分离处理**：
+   $$x = x_{normal} + x_{outlier}$$
+   对正常部分应用旋转，异常部分单独量化或保持高精度
+
+3. **混合策略**：
+   $$\tilde{x} = R^T x_{normal} + \alpha \cdot x_{outlier}$$
+   其中 $\alpha < 1$ 是衰减因子，部分保留异常值信息
+
+**量化友好的分布度量**
+
+为了评估旋转后的分布是否更适合量化，可以使用以下度量：
+1. **动态范围比**：$\text{DRR} = \frac{\max_i |x_i|}{\text{mean}_i |x_i|}$
+2. **有效位宽**：$\text{EBW} = \log_2(\text{range}/\text{resolution})$
+3. **量化信噪比预测**：$\text{SQNR}_{pred} = 6.02b + 1.76 - 20\log_{10}(\text{DRR})$
 
 ### 6.1.4 计算复杂度分析
 
