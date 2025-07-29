@@ -82,16 +82,109 @@ Performer近似方法：
 - 近似注意力：Attention(Q,K,V) ≈ φ(Q)(φ(K)ᵀV)
 - 复杂度：O(Nrd)，r为随机特征维度
 
+随机特征的理论基础（基于核方法）：
+- 标准注意力核：k(q,k) = exp(qᵀk/√d)
+- 随机Fourier特征近似：k(q,k) ≈ E_ω[φ_ω(q)ᵀφ_ω(k)]
+- 采样策略：ω ~ N(0, I/d)
+- 正交随机特征（FAVOR+）：使用正交矩阵提升近似质量
+
 Linformer降维投影：
 - 将K,V投影到低维空间：K' = KE, V' = VF
 - E,F ∈ R^(N×k)，k << N
 - 复杂度：O(Nkd)
+- 投影矩阵学习：通过低秩分解或直接优化
+
+线性Transformer（Linear Transformer）：
+- 核函数分解：kernel(Q,K) = φ(Q)φ(K)ᵀ
+- 特征函数选择：
+  - ELU + 1：φ(x) = ELU(x) + 1
+  - ReLU：φ(x) = ReLU(x)
+  - Squared ReLU：φ(x) = ReLU(x)²
+- 因果掩码处理：累积和实现O(N)复杂度
 
 计算精度权衡：
 - 完整注意力：100% accuracy baseline
 - Performer (r=256)：~98% accuracy, 10× speedup
 - Linformer (k=256)：~97% accuracy, 5× speedup
+- Linear Transformer：~96% accuracy, 15× speedup
 - 实际选择需根据任务精度要求
+
+内存效率对比：
+- 标准注意力：O(N²) memory for attention matrix
+- Performer：O(Nr) memory, r << N
+- Linformer：O(Nk) memory, k << N
+- Linear Transformer：O(Nd) memory only
+
+### 22.1.5 Flash Attention在视觉模型中的应用
+
+Flash Attention通过优化内存访问模式实现加速：
+
+核心思想：
+1. 分块计算（Tiling）：将QKV矩阵分成小块
+2. 融合计算：在SRAM中完成softmax和矩阵乘法
+3. 减少HBM访问：从O(N²) → O(N)
+
+分块策略参数选择：
+- 块大小B_r, B_c基于SRAM容量
+- A100 GPU：SRAM = 192KB per SM
+- 优化目标：maximize B_r × B_c × d ≤ SRAM_size
+- 典型配置：B_r = B_c = 64 for d = 64
+
+IO复杂度分析：
+- 标准注意力：
+  - 读取QKV：3Nd
+  - 写入/读取S = QKᵀ：N²
+  - 写入O：Nd
+  - 总IO：O(Nd + N²)
+- Flash Attention：
+  - 分块读取：O(Nd)
+  - 无需存储完整注意力矩阵
+  - 总IO：O(Nd)
+
+视觉模型特定优化：
+1. Patch-wise计算：利用patch局部性
+2. 多尺度支持：不同分辨率使用不同块大小
+3. 稀疏模式集成：跳过低权重区域
+
+性能提升实例（ViT-L on A100）：
+- 标准实现：45ms/image
+- Flash Attention：28ms/image
+- 加速比：1.6×
+- 内存使用：降低80%
+
+### 22.1.6 量化注意力机制
+
+INT8量化策略：
+1. Per-tensor量化：
+   - Scale计算：s = max(|X|) / 127
+   - 量化：X_int8 = round(X / s)
+   - 反量化：X' = X_int8 × s
+
+2. Per-token动态量化：
+   - 每个token独立scale：s_i = max(|X_i|) / 127
+   - 更高精度，略增加开销
+   - 适用于激活值分布差异大的场景
+
+3. 混合精度计算：
+   - QK计算：INT8 × INT8 → INT32
+   - Softmax：FP16保证数值稳定性
+   - Score × V：FP16 × INT8 → FP16
+
+量化误差分析：
+- 绝对误差：|X - X'| ≤ s/2
+- 相对误差：|X - X'|/|X| ≤ 1/(2×127) ≈ 0.4%
+- 累积误差：通过残差连接缓解
+
+特殊处理：
+1. Softmax量化：
+   - 输入减去最大值：X' = X - max(X)
+   - 指数运算保持FP16
+   - 输出量化回INT8
+
+2. LayerNorm与量化协同：
+   - LayerNorm后激活分布更均匀
+   - 有利于per-tensor量化
+   - 减少outlier影响
 
 ## 22.2 动态分辨率与自适应计算
 
@@ -167,20 +260,107 @@ Linformer降维投影：
 - Gate函数：gate(x) = sigmoid(W_g × GAP(x))
 - 稀疏执行：当gate < 0.1时跳过计算
 
+门控机制的训练策略：
+1. 直通估计器（Straight-Through Estimator）：
+   - 前向：hard_gate = (gate > threshold)
+   - 反向：使用soft gate梯度
+   - 避免梯度消失问题
+
+2. 稀疏正则化：
+   - L0正则：L_sparse = λ × Σ gate(x)
+   - 目标稀疏率：控制在60-80%
+   - 渐进式稀疏：从dense到sparse过渡
+
+3. 重要性引导的门控：
+   - 基于梯度幅值：importance = ||∇_x L||
+   - 基于激活方差：importance = Var(x)
+   - 动态阈值调整：保证最小激活率
+
 混合精度动态路由：
 - 高精度路径：FP16/INT8混合
 - 低精度路径：INT4量化
 - 路由决策：基于输入复杂度和精度需求
 
+路由网络设计：
+1. 轻量级分类器：
+   - 架构：Conv1x1 → ReLU → Conv1x1 → Sigmoid
+   - 参数量：< 0.1% of main network
+   - 推理开销：< 1ms
+
+2. 多路径选择策略：
+   - 简单样本：INT4快速路径
+   - 中等样本：INT8标准路径
+   - 复杂样本：FP16高精度路径
+   - 动态batch：相同精度样本组batch
+
 计算图优化技术：
 1. 子图融合：将多个小算子融合为大kernel
+   - Conv + BN + ReLU → FusedConvBNReLU
+   - MultiHead + Concat → FusedMultiHead
+   - 减少kernel launch开销
+
 2. 内存复用：相同shape的tensor共享内存
+   - 静态分析生命周期
+   - 构建冲突图
+   - 图着色算法分配内存
+   - 典型节省：40-60%内存
+
 3. 流水线并行：overlap计算与数据传输
+   - 双缓冲（Double Buffering）
+   - 异步拷贝（Async Copy）
+   - Tensor分片并行处理
+
+4. 算子调度优化：
+   - 关键路径优先
+   - 内存带宽均衡
+   - 计算密集型算子聚合
 
 性能提升实例：
 - 原始ViT-B：17.6 GFLOPs, 86.8MB activation
-- 优化后：11.2 GFLOPs, 42.3MB activation
-- 加速比：1.57×，内存降低：51%
+- 条件计算：14.1 GFLOPs (20%稀疏)
+- 图优化后：11.2 GFLOPs, 42.3MB activation
+- 总加速比：1.57×，内存降低：51%
+
+### 22.2.5 自适应批处理策略
+
+动态批大小调整：
+1. 延迟约束下的批处理：
+   - 目标延迟：T_target
+   - 当前延迟：T_current
+   - 批大小调整：B_new = B × (T_target / T_current)
+
+2. 内存约束下的批处理：
+   - 可用内存：M_available
+   - 每样本内存：M_per_sample
+   - 最大批：B_max = M_available / M_per_sample
+
+3. 吞吐量优化：
+   - 计算效率：η = actual_FLOPS / peak_FLOPS
+   - Sweet spot：通常在B=8-32之间
+   - 动态调整维持η > 0.8
+
+异构样本批处理：
+1. 序列长度分桶：
+   - 桶划分：[0-128], [128-256], [256-512], [512+]
+   - 同桶内padding最小化
+   - 跨桶动态组合
+
+2. 分辨率自适应：
+   - 低分辨率：112×112, batch=64
+   - 中分辨率：224×224, batch=16
+   - 高分辨率：448×448, batch=4
+   - 混合批处理：等效计算量均衡
+
+3. 优先级调度：
+   - 高优先级：实时处理，小batch
+   - 中优先级：标准batch
+   - 低优先级：大batch离线处理
+
+批处理效率分析：
+- Naive batching：60% GPU利用率
+- Length bucketing：75% GPU利用率
+- Dynamic batching：85% GPU利用率
+- Continuous batching：90%+ GPU利用率
 
 ## 22.3 视觉特征缓存策略
 
@@ -267,22 +447,118 @@ Linformer降维投影：
 - 优先级：priority = Σ(1/age_i) × importance
 - importance基于特征显著性
 
+算法详细实现：
+1. 数据结构设计：
+   - 访问历史：CircularBuffer<timestamp>[K]
+   - 优先级队列：MinHeap<priority, feature_id>
+   - 哈希索引：HashMap<feature_hash, cache_entry>
+
+2. K值自适应调整：
+   - 初始K=2，监控命中率变化
+   - 命中率提升<1%时，K不再增加
+   - 典型最优K值：3-5
+
+3. 时间复杂度优化：
+   - 访问更新：O(K)
+   - 淘汰选择：O(log N)
+   - 批量淘汰：O(M log N), M为淘汰数量
+
 特征重要性评估：
 1. 使用频率：access_count / time_window
+   - 指数衰减：freq = Σ exp(-λ(t_now - t_i))
+   - 衰减系数λ：0.01-0.1，根据场景调整
+
 2. 独特性：1 - max_similarity(f, others)
+   - 快速近似：使用LSH进行相似度估计
+   - 聚类中心：保留每个cluster的代表特征
+
 3. 计算成本：encoding_time × model_size
+   - 归一化成本：cost_norm = cost / avg_cost
+   - 高成本特征获得更高保留优先级
+
 4. 综合评分：score = α×freq + β×unique + γ×cost
+   - 权重学习：基于历史命中率优化
+   - 典型权重：α=0.5, β=0.3, γ=0.2
 
 动态容量管理：
 - 内存压力检测：available < threshold
+  - 软阈值：80%触发预警
+  - 硬阈值：95%强制淘汰
 - 批量淘汰：一次清理10-20%容量
+  - 避免频繁淘汰开销
+  - 保持一定空闲容量
 - 优先级保护：高分特征延迟淘汰
+  - Top 10%特征免疫一次淘汰
+  - 关键帧特征额外保护
+
+预测性淘汰：
+1. 访问模式学习：
+   - 时间序列预测：ARIMA模型
+   - 预测未来T时间内的访问概率
+   - 主动淘汰低概率特征
+
+2. 场景切换检测：
+   - 监控特征分布变化
+   - KL散度：KL(P_new || P_old) > threshold
+   - 触发缓存重置或加速淘汰
 
 淘汰策略效果：
 - LRU baseline：70% hit rate
 - LRU-2：78% hit rate
 - Adaptive LRU-K：85% hit rate
+- Predictive LRU-K：88% hit rate
 - 内存利用率：>90%
+
+### 22.3.5 分布式缓存架构
+
+多设备协同缓存：
+1. 缓存共享协议：
+   - 设备发现：mDNS/Bonjour
+   - 缓存目录同步：Gossip协议
+   - 一致性保证：最终一致性模型
+
+2. 分布式哈希表（DHT）：
+   - 一致性哈希：Chord算法
+   - 虚拟节点：每设备32-64个
+   - 负载均衡：动态迁移热点数据
+
+3. 网络传输优化：
+   - 压缩传输：特征量化到INT8
+   - 增量更新：仅传输差异部分
+   - 批量请求：减少往返次数
+
+边缘-云协同缓存：
+1. 分层缓存策略：
+   - 边缘热数据：最近1小时
+   - 云端冷数据：历史存档
+   - 智能预取：基于用户行为预测
+
+2. 云端特征库：
+   - 预计算常见场景特征
+   - 模型无关的通用特征
+   - 定期更新和优化
+
+3. 自适应下载：
+   - 网络质量感知
+   - 按需下载相关特征
+   - 断点续传支持
+
+缓存一致性保证：
+1. 版本控制：
+   - 特征版本号：model_version + data_version
+   - 兼容性检查：自动转换旧版本特征
+   - 增量更新：差分编码
+
+2. 失效传播：
+   - 主动失效：模型更新时广播
+   - 被动失效：访问时版本检查
+   - 延迟失效：非关键特征延迟更新
+
+性能指标：
+- 单机缓存：100ms平均访问延迟
+- 局域网缓存：150ms平均访问延迟
+- 云端缓存：500ms平均访问延迟
+- 整体命中率：>95%（混合策略）
 
 ## 22.4 编码器剪枝与量化
 
