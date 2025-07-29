@@ -20,6 +20,14 @@ $$Y[n,c_o,y,x] = \sum_{c_i,ky,kx} X[n,c_i,y \cdot s_y + ky \cdot d_y - p_y, x \c
 
 **版本管理与向后兼容**：ONNX采用了严格的版本管理策略。每个算子都有版本号，新版本必须保持向后兼容。这确保了模型的长期可用性。
 
+**图优化能力**：ONNX Runtime内置了多种图优化passes：
+- 常量折叠（Constant Folding）：预计算常量表达式
+- 算子融合（Operator Fusion）：如Conv+BN+ReLU融合
+- 冗余节点消除（Redundant Node Elimination）
+- 内存布局优化（Memory Layout Optimization）
+
+这些优化可以显著提升推理性能，典型加速比为1.5-3×。
+
 然而，ONNX在实际应用中也存在显著限制：
 
 **动态图支持有限**：虽然ONNX支持动态shape，但对于包含复杂控制流的模型（如包含动态循环的Transformer变体），转换可能失败或产生次优结果。
@@ -30,6 +38,17 @@ $$Y[n,c_o,y,x] = \sum_{c_i,ky,kx} X[n,c_i,y \cdot s_y + ky \cdot d_y - p_y, x \c
 3. 在目标框架中重新实现
 
 **量化信息丢失**：ONNX的量化支持仍在发展中。QDQ（Quantize-Dequantize）模式虽然提供了基础支持，但许多高级量化技术（如per-channel非对称量化、混合精度量化）的信息可能在转换中丢失。
+
+**性能可移植性问题**：ONNX模型在不同后端的性能表现可能差异很大。一个在GPU上优化良好的ONNX图，在CPU或NPU上可能需要完全不同的优化策略。这需要：
+- Backend-specific图重写
+- 算子实现的性能建模
+- 自适应的优化策略选择
+
+**实践建议**：
+1. 优先使用高版本ONNX opset（如opset 17+），支持更多算子
+2. 转换前简化模型结构，移除不必要的操作
+3. 使用onnx-simplifier工具优化转换后的模型
+4. 保留原始模型用于精度对比和调试
 
 ### 21.1.2 PyTorch到TensorRT的转换流程与陷阱
 
@@ -47,6 +66,15 @@ traced_model = torch.jit.trace(model, example_input)
 scripted_model = torch.jit.script(model)
 ```
 
+两种方式的选择依据：
+- **Trace模式**：适合纯前向传播网络，无控制流依赖
+- **Script模式**：支持if/for/while等控制流，但可能引入额外开销
+
+追踪过程的常见问题：
+- 输入依赖的动态行为无法捕获
+- 随机操作（dropout）需要先设置为eval模式
+- 自定义Python函数需要用TorchScript重写
+
 **2. ONNX导出与优化**
 
 导出时需要注意的关键参数：
@@ -54,6 +82,21 @@ scripted_model = torch.jit.script(model)
 - do_constant_folding：启用常量折叠优化
 - input_names/output_names：明确指定便于后续处理
 - dynamic_axes：指定动态维度
+- export_params：是否导出模型权重
+
+高级导出选项：
+```python
+# 自定义算子映射
+custom_opsets = {"custom_domain": 1}
+
+# 导出时记录详细信息
+torch.onnx.export(model, dummy_input, "model.onnx",
+                  verbose=True,
+                  export_params=True,
+                  do_constant_folding=True,
+                  opset_version=13,
+                  custom_opsets=custom_opsets)
+```
 
 **3. TensorRT构建与优化**
 
@@ -63,6 +106,7 @@ TensorRT的优化包括：
 - Conv + BN + ReLU → 单个融合kernel
 - Transpose + MatMul → 优化的GEMM调用
 - Element-wise操作链 → 单次内存访问
+- Reshape + Transpose → 零拷贝视图操作
 
 融合带来的性能提升可以通过Roofline模型分析。假设原始操作链的算术强度为：
 $$AI_{original} = \frac{\sum_i FLOPs_i}{\sum_i MemoryAccess_i}$$
@@ -72,11 +116,30 @@ $$AI_{fused} = \frac{\sum_i FLOPs_i}{MemoryAccess_{input} + MemoryAccess_{output
 
 通常 $AI_{fused} >> AI_{original}$，使得操作从memory-bound转变为compute-bound。
 
+**Kernel自动调优（Auto-tuning）**：
+TensorRT会测试多种kernel实现并选择最快的：
+- 不同的tile大小
+- 不同的内存访问模式
+- 不同的并行策略
+- Tensor Core vs CUDA Core
+
+调优时间与精度的权衡通过builder配置控制：
+```
+config.set_tactic_sources(1 << int(trt.TacticSource.CUBLAS_LT))
+config.max_workspace_size = 1 << 30  # 1GB
+```
+
 **精度校准（Precision Calibration）**：对于INT8量化，TensorRT使用熵校准算法确定量化参数：
 
 $$KL_{divergence}(P||Q) = \sum_i P(i) \log \frac{P(i)}{Q(i)}$$
 
 其中P是原始FP32分布，Q是量化后的分布。TensorRT通过最小化KL散度来选择最优的量化阈值。
+
+校准过程的关键考虑：
+- 校准数据集应代表实际输入分布
+- 通常需要500-1000个样本
+- 可以per-tensor或per-channel校准
+- 支持混合精度（部分层保持FP16/FP32）
 
 **常见陷阱与解决方案**：
 
@@ -85,16 +148,40 @@ $$KL_{divergence}(P||Q) = \sum_i P(i) \log \frac{P(i)}{Q(i)}$$
    优化建议：opt_shape应设置为最常见的输入尺寸
    profile.set_shape("input", min=(1,3,224,224), opt=(8,3,224,224), max=(32,3,224,224))
    ```
+   
+   Profile选择策略：
+   - 分析实际使用中的shape分布
+   - opt_shape设为P50或均值
+   - min/max留有一定余量但不要过大
 
 2. **Plugin兼容性**：某些PyTorch操作在TensorRT中没有原生支持，需要自定义plugin。常见的包括：
    - 特殊的激活函数（如GELU的特定实现）
    - 自定义的注意力机制
    - 非标准的归一化操作
+   - 复杂的索引操作
+
+   Plugin开发要点：
+   - 继承IPluginV2DynamicExt接口
+   - 实现高效的CUDA kernel
+   - 支持序列化/反序列化
+   - 考虑不同精度的实现
 
 3. **数值精度问题**：FP16/INT8推理可能导致精度下降。建议采用逐层精度分析：
    $$\epsilon_{layer} = ||Y_{fp32} - Y_{reduced}||_2 / ||Y_{fp32}||_2$$
    
    当$\epsilon_{layer} > \tau$（如0.01）时，该层应保持FP32精度。
+
+   精度调试技巧：
+   - 使用Polygraphy工具对比各层输出
+   - 识别精度敏感层（通常是早期层和最后几层）
+   - 尝试QAT（量化感知训练）改善精度
+   - 考虑输出后处理补偿精度损失
+
+4. **内存优化考虑**：
+   - 使用内存池减少分配开销
+   - 合理设置workspace大小
+   - 启用DLA（Deep Learning Accelerator）卸载
+   - 使用CUDA Graph减少kernel启动开销
 
 ### 21.1.3 TensorFlow Lite转换与量化选项
 
