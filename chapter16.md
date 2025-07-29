@@ -713,18 +713,786 @@ On_cache_miss(address):
 
 ## 16.4 Chunked/Streaming Prefill技术
 
+传统的预填充方法需要一次性处理整个输入序列，这在长序列场景下会导致显著的首Token延迟。Chunked/Streaming Prefill技术通过将输入序列分块处理，实现了延迟与吞吐量的更好平衡。
+
 ### 16.4.1 分块预填充的原理
+
+分块预填充将长序列分解为多个小块逐步处理，在保持计算效率的同时显著降低首Token延迟。
+
+**1. 基本思想与动机**
+
+传统预填充的延迟特性：
+```
+TTFT_traditional = O(n × L × d²)
+```
+其中n为序列长度，L为层数，d为隐藏维度。
+
+分块预填充将序列分为k个块，每块大小为c = n/k：
+```
+TTFT_chunked = O(c × L × d²) = O(n/k × L × d²)
+```
+
+理论上可以将TTFT降低k倍，但需要考虑额外开销。
+
+**2. 注意力机制的分块计算**
+
+标准自注意力计算：
+```
+Attention(Q, K, V) = softmax(QK^T/√d) × V
+```
+
+分块计算需要处理跨块依赖。设输入序列分为k个块：X = [X₁, X₂, ..., Xₖ]
+
+对于第i个块的注意力计算：
+```
+Q_i = X_i × W_q
+K_[:i] = [X_1; ...; X_i] × W_k  # 所有已处理块的K
+V_[:i] = [X_1; ...; X_i] × W_v  # 所有已处理块的V
+
+Attention_i = softmax(Q_i × K_[:i]^T / √d) × V_[:i]
+```
+
+关键洞察：每个块的查询（Q）只需要与之前所有块的键值（KV）交互。
+
+**3. 因果掩码的增量更新**
+
+分块处理需要正确维护因果掩码：
+```
+Mask[i,j] = {
+    1, if j ≤ i  # 可以看到之前的token
+    0, if j > i  # 不能看到未来的token
+}
+```
+
+对于块级别的掩码：
+```
+BlockMask[block_i, block_j] = {
+    FULL,     if block_j < block_i    # 完全可见
+    PARTIAL,  if block_j == block_i   # 块内因果掩码
+    ZERO,     if block_j > block_i    # 完全不可见
+}
+```
+
+**4. 数学分析：精度与效率权衡**
+
+分块计算引入的误差主要来自Softmax的归一化：
+
+原始计算：
+```
+softmax(x)_i = exp(x_i) / Σ_j exp(x_j)
+```
+
+分块近似：
+```
+softmax_chunked(x)_i ≈ exp(x_i) / (Σ_{j∈processed} exp(x_j))
+```
+
+误差上界：
+```
+|softmax(x)_i - softmax_chunked(x)_i| ≤ exp(-c) × (k-1)/k
+```
+
+其中c为块大小。块越大，近似越精确。
+
+**5. KV Cache的增量构建**
+
+分块预填充的核心优势在于KV Cache的增量构建：
+
+```
+# 传统方法：一次性构建
+KV_Cache = compute_kv(X[1:n])  # O(n)延迟
+
+# 分块方法：增量构建
+for i in range(k):
+    KV_Cache[i*c:(i+1)*c] = compute_kv(X[i*c:(i+1)*c])  # O(c)延迟
+    if i == 0:
+        return first_token  # 提前返回
+```
+
+内存写入模式从突发写入变为流式写入，更适合边缘设备的内存系统。
+
+**6. 并行化机会**
+
+分块处理创造了新的并行化机会：
+- 块内并行：每个块内的token仍然可以并行处理
+- 流水线并行：不同层可以处理不同的块
+- 预计算并行：下一块的KV可以与当前块的注意力计算并行
+
+并行效率分析：
+```
+Efficiency = (Useful_computation) / (Total_time)
+           = 1 - (Pipeline_bubble / Total_time)
+           = 1 - (L-1)/(k+L-1)
+```
+
+当块数k >> L时，效率接近100%。
 
 ### 16.4.2 流式处理架构设计
 
+流式处理架构是实现低延迟推理的关键，需要从系统层面重新设计数据流和计算流程。
+
+**1. 流水线架构设计**
+
+三阶段流水线设计：
+```
+Stage 1: Preprocessing
+- Tokenization (可以流式)
+- Embedding lookup
+- Position encoding
+
+Stage 2: Transformer Blocks
+- Attention computation
+- FFN computation
+- KV Cache update
+
+Stage 3: Token Generation
+- Logits computation
+- Sampling
+- Detokenization
+```
+
+流水线调度：
+```
+Time  | Stage 1    | Stage 2    | Stage 3
+------|------------|------------|------------
+t₀    | Block₁     | -          | -
+t₁    | Block₂     | Block₁     | -
+t₂    | Block₃     | Block₂     | Block₁(生成)
+...   | ...        | ...        | ...
+```
+
+**2. 环形缓冲区设计**
+
+高效的数据结构对流式处理至关重要：
+
+```
+class RingBuffer:
+    capacity: int  # 最大容量
+    head: int      # 写入位置
+    tail: int      # 读取位置
+    
+    # 关键属性
+    available_space = (capacity - (head - tail)) % capacity
+    available_data = (head - tail) % capacity
+```
+
+KV Cache的环形缓冲实现：
+```
+KV_RingBuffer = {
+    "K": RingBuffer(max_seq_len × d × L),
+    "V": RingBuffer(max_seq_len × d × L),
+    "position_map": [...]  # 位置映射
+}
+```
+
+优势：
+- 无需移动数据
+- O(1)的插入和删除
+- 自然支持滑动窗口
+
+**3. 异步计算模式**
+
+设计异步计算流程最大化硬件利用率：
+
+```
+# 计算与IO重叠
+async def streaming_prefill():
+    futures = []
+    
+    for chunk in chunks:
+        # 异步提交计算任务
+        future = submit_compute(chunk)
+        futures.append(future)
+        
+        # 处理完成的结果
+        for completed in as_completed(futures):
+            result = completed.result()
+            update_kv_cache(result)
+            
+            if is_first_chunk(completed):
+                yield generate_first_token()
+```
+
+**4. 内存管理策略**
+
+流式处理的内存管理需要特别设计：
+
+双缓冲策略：
+```
+Buffer_A: 当前处理块
+Buffer_B: 下一块预加载
+
+while has_more_chunks():
+    # 并行：计算A，加载B
+    parallel_execute(
+        compute(Buffer_A),
+        prefetch(Buffer_B)
+    )
+    swap(Buffer_A, Buffer_B)
+```
+
+内存池设计：
+```
+MemoryPool = {
+    "activation_pool": FixedPool(batch × chunk × d × L),
+    "gradient_pool": None,  # 推理不需要
+    "temp_pool": DynamicPool(),  # 临时buffer
+}
+```
+
+**5. 错误恢复与一致性**
+
+流式处理需要处理部分失败的情况：
+
+检查点机制：
+```
+Checkpoint = {
+    "processed_chunks": int,
+    "kv_cache_state": bytes,
+    "attention_state": bytes,
+    "position": int
+}
+
+# 每处理N个块保存检查点
+if chunk_id % checkpoint_interval == 0:
+    save_checkpoint(current_state)
+```
+
+一致性保证：
+- 原子性的KV Cache更新
+- 版本控制的状态管理
+- 快速回滚能力
+
+**6. 负载均衡与调度**
+
+动态调度适应不同的计算资源：
+
+```
+# 工作窃取调度器
+class WorkStealingScheduler:
+    def schedule(self, chunk):
+        # 找到最空闲的计算单元
+        unit = find_least_loaded_unit()
+        
+        # 考虑数据局部性
+        if has_cached_data(unit, chunk):
+            priority += locality_bonus
+            
+        # 分配任务
+        unit.enqueue(chunk, priority)
+        
+    def steal_work(self, idle_unit):
+        # 从最忙的单元窃取任务
+        busy_unit = find_most_loaded_unit()
+        if busy_unit.queue_size > threshold:
+            task = busy_unit.dequeue_half()
+            idle_unit.enqueue(task)
+```
+
+**7. 监控与自适应**
+
+实时监控系统状态并动态调整：
+
+关键指标：
+```
+Metrics = {
+    "chunk_latency": histogram,      # 块处理延迟
+    "pipeline_efficiency": gauge,    # 流水线效率
+    "memory_pressure": gauge,        # 内存压力
+    "compute_utilization": gauge,    # 计算利用率
+}
+```
+
+自适应策略：
+```
+if memory_pressure > threshold:
+    reduce_chunk_size()
+elif compute_utilization < threshold:
+    increase_chunk_size()
+```
+
 ### 16.4.3 块大小的优化策略
+
+块大小是影响流式预填充性能的关键参数，需要综合考虑多个因素进行优化。
+
+**1. 理论最优块大小分析**
+
+建立块大小优化的数学模型：
+
+总延迟模型：
+```
+Latency(c) = First_chunk_latency + Remaining_latency
+           = α×c + β×(n-c)/throughput(c)
+```
+
+其中：
+- α：单位token的计算时间
+- β：流水线并行效率因子
+- throughput(c)：块大小为c时的吞吐量
+
+对c求导找到最优值：
+```
+dLatency/dc = α - β×n×throughput'(c)/throughput²(c) = 0
+```
+
+考虑到throughput(c)通常呈现先增后平的特性：
+```
+throughput(c) = T_max × (1 - exp(-c/c₀))
+```
+
+可得最优块大小：
+```
+c_opt = c₀ × log(1 + α×T_max×c₀/(β×n))
+```
+
+**2. 硬件约束下的块大小选择**
+
+实际选择需要考虑硬件限制：
+
+内存约束：
+```
+c_max_memory = Available_memory / (2×L×d×sizeof(float))
+```
+- 因子2来自KV Cache
+- 需要预留激活值空间
+
+计算约束：
+```
+c_max_compute = sqrt(Peak_FLOPS × Target_latency / (2×L×d²))
+```
+
+缓存约束：
+```
+c_max_cache = Cache_size / (3×d×sizeof(float))
+```
+- 因子3来自Q、K、V
+
+实际块大小：
+```
+c_practical = min(c_opt, c_max_memory, c_max_compute, c_max_cache)
+```
+
+**3. 动态块大小调整策略**
+
+根据运行时状态动态调整块大小：
+
+基于负载的调整：
+```
+# 高负载时使用小块，低负载时使用大块
+c_dynamic = c_base × (2 - load_factor)
+```
+
+基于序列长度的调整：
+```
+c_adaptive = {
+    64,   if n < 256     # 短序列小块
+    128,  if 256 ≤ n < 512
+    256,  if 512 ≤ n < 1024
+    512,  if n ≥ 1024    # 长序列大块
+}
+```
+
+基于延迟SLA的调整：
+```
+if current_latency > target_latency:
+    c = c × 0.8  # 减小块大小
+elif current_latency < 0.5 × target_latency:
+    c = c × 1.2  # 增大块大小
+```
+
+**4. 块大小与批处理的交互**
+
+批处理情况下的块大小优化更加复杂：
+
+批内异构处理：
+```
+# 不同序列使用不同块大小
+for seq in batch:
+    seq.chunk_size = compute_optimal_chunk_size(seq.length)
+```
+
+块大小对齐策略：
+```
+# 对齐到硬件友好的大小
+aligned_chunk_size = ceil(c / warp_size) × warp_size
+```
+
+内存效率优化：
+```
+# 选择块大小使得批处理效率最高
+c_batch_opt = argmax(
+    batch_size × c / padding_overhead(batch_size, c)
+)
+```
+
+**5. 预测模型与自动调优**
+
+使用机器学习预测最优块大小：
+
+特征提取：
+```
+Features = {
+    "seq_length": n,
+    "model_size": d,
+    "batch_size": b,
+    "available_memory": mem,
+    "current_load": load,
+    "hardware_type": hw_id
+}
+```
+
+预测模型：
+```
+# 基于历史数据训练的回归模型
+c_predicted = ML_model.predict(Features)
+```
+
+在线学习更新：
+```
+# 收集实际性能数据
+actual_performance = measure_performance(c_predicted)
+
+# 更新模型
+if abs(predicted_perf - actual_performance) > threshold:
+    ML_model.partial_fit(Features, actual_performance)
+```
+
+**6. 多级块大小策略**
+
+使用层次化的块大小提高灵活性：
+
+```
+# 大块内包含小块
+Hierarchical_chunks = {
+    "level_1": 512,  # 大块，用于批处理
+    "level_2": 128,  # 中块，用于流水线
+    "level_3": 32,   # 小块，用于低延迟
+}
+```
+
+自适应选择：
+```
+if latency_critical:
+    use_level_3_chunks()
+elif throughput_critical:
+    use_level_1_chunks()
+else:
+    use_level_2_chunks()
+```
 
 ### 16.4.4 与KV Cache的协同设计
 
+分块预填充与KV Cache的协同设计是实现高效流式推理的关键。
+
+**1. 增量KV Cache构建**
+
+传统的一次性构建vs增量构建：
+
+增量更新算法：
+```
+# 每个块计算后立即更新
+for chunk_id, chunk in enumerate(chunks):
+    # 计算当前块的KV
+    K_chunk = compute_key(chunk)
+    V_chunk = compute_value(chunk)
+    
+    # 更新到全局Cache
+    start_idx = chunk_id * chunk_size
+    end_idx = start_idx + chunk_size
+    KV_Cache.K[start_idx:end_idx] = K_chunk
+    KV_Cache.V[start_idx:end_idx] = V_chunk
+    
+    # 立即可用于生成
+    if chunk_id == 0:
+        enable_generation()
+```
+
+写入优化：
+- 使用写合并减少内存事务
+- 预分配空间避免动态扩展
+- 对齐到缓存行边界
+
+**2. KV Cache的分片存储**
+
+将KV Cache按块组织提高访问效率：
+
+```
+class ChunkedKVCache:
+    chunks: List[KVChunk]
+    chunk_size: int
+    
+    class KVChunk:
+        K: Tensor[chunk_size, num_heads, head_dim]
+        V: Tensor[chunk_size, num_heads, head_dim]
+        metadata: ChunkMetadata
+```
+
+访问模式优化：
+```
+# 连续块的预取
+def prefetch_chunks(current_chunk_id):
+    next_chunks = [current_chunk_id + 1, current_chunk_id + 2]
+    for chunk_id in next_chunks:
+        if chunk_id < num_chunks:
+            cache_prefetch(chunks[chunk_id])
+```
+
+**3. 压缩与稀疏化协同**
+
+分块处理为KV Cache压缩提供了机会：
+
+块级压缩：
+```
+# 对完成的块进行压缩
+def compress_completed_chunk(chunk):
+    if chunk.access_count < threshold:
+        # 低频访问块使用高压缩比
+        compressed = quantize_aggressive(chunk)
+    else:
+        # 高频访问块保持高精度
+        compressed = quantize_conservative(chunk)
+    return compressed
+```
+
+稀疏化策略：
+```
+# 识别并丢弃不重要的KV对
+def sparsify_chunk(chunk, keep_ratio=0.5):
+    # 计算注意力分数的累计贡献
+    attention_scores = compute_attention_importance(chunk)
+    
+    # 保留最重要的部分
+    top_k_indices = top_k(attention_scores, k=keep_ratio*chunk_size)
+    sparse_chunk = chunk[top_k_indices]
+    
+    return sparse_chunk, top_k_indices
+```
+
+**4. 预测性缓存管理**
+
+基于访问模式预测优化缓存：
+
+访问模式分析：
+```
+# 跟踪KV访问模式
+AccessPattern = {
+    "frequency": Counter(),      # 访问频率
+    "recency": OrderedDict(),    # 最近访问
+    "locality": SpatialMap(),    # 空间局部性
+}
+```
+
+预测性加载：
+```
+def predictive_load(current_position):
+    # 基于历史模式预测未来访问
+    predicted_positions = access_predictor(
+        current_position, 
+        AccessPattern
+    )
+    
+    # 预加载预测的块
+    for pos in predicted_positions:
+        chunk_id = pos // chunk_size
+        if not is_cached(chunk_id):
+            async_load(chunks[chunk_id])
+```
+
+**5. 多级缓存层次**
+
+设计多级KV Cache适应不同访问频率：
+
+```
+CacheHierarchy = {
+    "L1": {  # 片上SRAM
+        "capacity": 1MB,
+        "latency": 1cycle,
+        "policy": "MRU"  # 最近使用
+    },
+    "L2": {  # 片上缓存
+        "capacity": 8MB,
+        "latency": 10cycles,
+        "policy": "LFU"  # 最频繁使用
+    },
+    "L3": {  # DRAM
+        "capacity": "unlimited",
+        "latency": 100cycles,
+        "policy": "FIFO"
+    }
+}
+```
+
+迁移策略：
+```
+# 基于访问热度的迁移
+def migrate_between_levels():
+    # L3 -> L2: 热数据上移
+    hot_chunks = identify_hot_chunks(L3, threshold=10)
+    for chunk in hot_chunks:
+        if L2.has_space():
+            L2.insert(chunk)
+            L3.mark_cached_elsewhere(chunk)
+    
+    # L2 -> L1: 更热的数据继续上移
+    very_hot_chunks = identify_hot_chunks(L2, threshold=50)
+    for chunk in very_hot_chunks:
+        if L1.has_space():
+            L1.insert(chunk)
+```
+
+**6. 一致性与同步机制**
+
+确保分块更新的一致性：
+
+版本控制：
+```
+class VersionedKVCache:
+    version: int
+    chunks: Dict[int, KVChunk]
+    
+    def update_chunk(self, chunk_id, new_data):
+        with self.lock:
+            self.chunks[chunk_id] = new_data
+            self.version += 1
+            self.notify_readers(chunk_id, self.version)
+```
+
+读写同步：
+```
+# 读写锁实现
+class RWLock:
+    def read_lock(self, chunk_id):
+        while self.writing[chunk_id]:
+            wait()
+        self.readers[chunk_id] += 1
+    
+    def write_lock(self, chunk_id):
+        while self.readers[chunk_id] > 0 or self.writing[chunk_id]:
+            wait()
+        self.writing[chunk_id] = True
+```
+
+原子更新：
+```
+# 使用双缓冲确保原子性
+def atomic_update(chunk_id, new_data):
+    # 写入影子副本
+    shadow_buffer[chunk_id] = new_data
+    
+    # 原子切换指针
+    atomic_swap(active_buffer[chunk_id], shadow_buffer[chunk_id])
+```
+
 ## 本章小结
+
+本章深入探讨了首Token延迟（TTFT）优化的核心技术，这是提升大语言模型用户体验的关键环节。我们从TTFT的构成分析出发，逐步深入到各种优化技术的原理与实践。
+
+**关键概念回顾：**
+
+1. **TTFT的组成与影响因素**
+   - TTFT = T_preprocess + T_prefill + T_generate + T_overhead
+   - 预填充阶段占据主要延迟，是优化的重点
+   - 内存带宽往往是边缘设备的瓶颈
+
+2. **预填充优化技术**
+   - 并行化策略：序列级、张量级、流水线级并行
+   - 算子融合：Flash Attention风格的融合显著减少内存访问
+   - 内存访问优化：数据布局、预取、内存池管理
+   - 动态形状适配：padding策略、动态批处理、JIT编译
+
+3. **混合精度预填充**
+   - 精度需求分析：FFN > QKV > Attention > Softmax > LayerNorm
+   - 层级混合精度：静态配置与动态切换相结合
+   - 硬件适配：充分利用TensorCore等专用加速单元
+   - 精度-性能权衡：预填充阶段可以使用更激进的量化策略
+
+4. **Chunked/Streaming Prefill技术**
+   - 分块原理：将O(n)延迟降低到O(n/k)
+   - 流式架构：三阶段流水线、环形缓冲、异步计算
+   - 块大小优化：理论分析与实际约束的平衡
+   - KV Cache协同：增量构建、分片存储、多级缓存
+
+**核心公式总结：**
+
+- Roofline模型判断：AI < P_max/BW_max 时为memory-bound
+- 最优批处理等待时间：t_wait* = sqrt(α/(β×λ))
+- 分块误差上界：|error| ≤ exp(-c)×(k-1)/k
+- 流水线效率：Efficiency = 1 - (L-1)/(k+L-1)
+- 最优块大小：c_opt = c₀×log(1 + α×T_max×c₀/(β×n))
+
+**实践指导：**
+
+1. 对于短序列（<128 tokens），重点优化内存访问模式
+2. 对于长序列（>512 tokens），采用分块预填充显著降低延迟
+3. 混合精度策略应根据硬件能力和质量要求动态调整
+4. 流式处理架构特别适合实时交互场景
+
+通过本章的学习，读者应该能够：
+- 分析特定场景下的TTFT瓶颈
+- 选择合适的优化技术组合
+- 设计高效的预填充流水线
+- 实现生产级的低延迟推理系统
 
 ## 练习题
 
 ### 基础题
 
+**1. TTFT组成分析**
+计算一个7B参数模型（d=4096, L=32, n_heads=32）处理512个token输入时，预填充阶段的理论FLOPs。假设使用标准Transformer架构，FFN隐藏层维度为4d。
+
+*Hint: 分别计算Attention和FFN的FLOPs，注意QKV投影和输出投影。*
+
+**2. 内存带宽需求**
+在上述模型配置下，如果目标TTFT为100ms，计算所需的最小内存带宽。假设使用FP16精度，批大小为1。
+
+*Hint: 计算权重读取、激活值读写、KV Cache写入的总数据量。*
+
+**3. 块大小选择**
+给定内存带宽50GB/s，计算峰值1 TFLOPS（FP16），缓存大小8MB，针对序列长度n=1024，计算合理的块大小范围。
+
+*Hint: 分别从内存、计算、缓存约束计算上限，取最小值。*
+
+**4. 混合精度配置**
+设计一个32层模型的混合精度方案，要求perplexity增加不超过0.15%。已知：FFN使用INT8增加0.1%，Attention使用FP16增加0.05%，全部FP16增加0.2%。
+
+*Hint: 考虑渐进式精度降级策略。*
+
 ### 挑战题
+
+**5. 流水线效率优化**
+设计一个自适应流水线调度算法，使得在变长输入（64-2048 tokens）情况下，流水线效率始终保持在85%以上。考虑3级流水线，每级处理时间比例为1:8:1。
+
+*Hint: 考虑动态调整块大小和流水线深度，建立效率与块数、流水线级数的关系模型。*
+
+**6. KV Cache压缩策略**
+提出一种基于注意力模式的KV Cache压缩方案，要求：
+- 压缩率达到4:1
+- 质量损失控制在1% perplexity以内
+- 支持增量更新
+- 访问延迟增加不超过20%
+
+*Hint: 考虑结合稀疏化、量化和预测性缓存管理。分析不同层、不同头的注意力模式差异。*
+
+**7. 端到端TTFT优化**
+为一个边缘部署场景（ARM Cortex-A78 + Mali G78，8GB RAM）设计完整的TTFT优化方案。模型为2.7B参数，目标TTFT < 200ms，支持批大小4，最大序列长度2048。
+
+*Hint: 综合考虑所有优化技术，包括硬件特性、内存层次、并行策略等。提供详细的技术选择理由和预期性能分析。*
+
+**8. 理论分析题**
+证明在内存带宽受限的情况下，存在一个最优的预填充块大小c*，使得端到端延迟最小。推导c*与模型参数、硬件参数的关系，并讨论该理论结果的实际应用限制。
+
+*Hint: 建立包含计算时间、内存传输时间、流水线开销的完整模型。使用拉格朗日乘数法处理约束条件。*
+
+<details>
+<summary>答案提示</summary>
+
+1. FLOPs ≈ 537.9B（Attention: 150.9B, FFN: 387B）
+2. 最小带宽 ≈ 65.5 GB/s
+3. 合理块大小范围：128-256 tokens
+4. 前8层FP32，中16层FP16，后8层INT8
+5. 关键：块大小与序列长度的映射函数，考虑硬件切换开销
+6. 结合top-k稀疏（保留25%）+ INT8量化 + 预测性加载
+7. 采用128 token块大小，2级流水线，混合INT8/FP16，动态批处理
+8. c* = sqrt(BW_max×T_target/(2×ρ×L))，其中ρ为内存访问密度
+
+</details>
