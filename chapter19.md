@@ -20,6 +20,25 @@ TensorRT的架构分为三个主要阶段：
 - **Engine**：序列化的优化推理引擎
 - **Runtime**：执行引擎的运行时环境
 
+TensorRT的优化哲学基于以下原则：
+
+1. **硬件特定优化**：针对NVIDIA GPU架构特点进行深度优化
+2. **离线编译**：将耗时的优化过程移到部署前
+3. **全图优化**：考虑整个网络的优化机会，而非局部
+4. **自动化调优**：通过profiling选择最佳kernel实现
+
+Builder配置的关键参数：
+- `max_batch_size`：最大批处理大小
+- `max_workspace_size`：优化过程中可用的临时内存
+- `fp16_mode`/`int8_mode`：启用低精度推理
+- `strict_type_constraints`：严格类型约束模式
+
+引擎生成流程的数学模型：
+$$\text{Engine} = \text{Optimize}(\text{Network}, \text{Hardware}, \text{Constraints})$$
+
+其中优化过程包含多个子步骤：
+$$\text{Optimize} = \text{Fuse} \circ \text{Quantize} \circ \text{SelectKernel} \circ \text{AllocateMemory}$$
+
 ### 19.1.2 图优化技术
 
 TensorRT的图优化包含多个层次：
@@ -39,6 +58,16 @@ $$y = W' x + b'$$
 其中：
 $$W' = \frac{\gamma W}{\sqrt{\sigma^2 + \epsilon}}, \quad b' = \frac{\gamma (b - \mu)}{\sqrt{\sigma^2 + \epsilon}} + \beta$$
 
+这种融合带来的性能提升：
+- **内存带宽节省**：避免中间结果的存储，减少了$2 \times H \times W \times C \times \text{sizeof}(T)$的内存读写
+- **计算效率提升**：减少kernel启动开销，提高GPU占用率
+- **数值稳定性**：避免了中间结果的精度损失
+
+其他常见的层融合模式：
+- **Pointwise融合**：`Add + ReLU`、`Mul + Add`等element-wise操作
+- **Reduction融合**：`Softmax = Exp + Sum + Div`的一体化实现
+- **Activation融合**：将激活函数融入前序计算层
+
 **张量融合（Tensor Fusion）**
 
 对于Transformer中的多头注意力，Q、K、V投影可以融合：
@@ -51,6 +80,25 @@ $$[Q, K, V] = X[W_Q, W_K, W_V]$$
 
 减少了内存访问次数，从3次矩阵乘法变为1次。
 
+更进一步的优化包括Multi-Head Attention的完整融合：
+$$\text{MHA}(X) = \text{Concat}(\text{head}_1, ..., \text{head}_h)W_O$$
+
+TensorRT可以将整个MHA计算融合为单个高度优化的kernel，利用：
+- Tensor Core加速矩阵运算
+- 共享内存减少数据移动
+- Warp级并行优化softmax计算
+
+**层消除与简化**
+
+TensorRT会识别并消除冗余计算：
+- **Identity removal**：$\text{Identity}(x) \rightarrow x$
+- **Constant folding**：编译时计算常量表达式
+- **Reshape elimination**：连续的reshape操作合并
+- **Dropout removal**：推理时移除dropout层（等价于identity）
+
+数学上的等价变换：
+$$\text{Reshape}(m,n) \circ \text{Reshape}(n,k) = \text{Reshape}(m,k)$$
+
 **内核自动调优（Kernel Auto-tuning）**
 
 TensorRT会为每个算子测试多种实现：
@@ -60,6 +108,26 @@ TensorRT会为每个算子测试多种实现：
 
 选择准则基于实际硬件测量：
 $$\text{Best Kernel} = \arg\min_{k \in \text{Kernels}} \{\text{Latency}(k) \mid \text{Accuracy}(k) \geq \text{threshold}\}$$
+
+内核选择考虑的因素：
+1. **算法复杂度**：如卷积的Winograd、FFT、Direct等算法
+2. **内存访问模式**：coalesced access、bank conflict避免
+3. **硬件特性利用**：Tensor Core、共享内存大小、寄存器数量
+4. **数据布局**：NCHW vs NHWC对不同kernel的影响
+
+对于卷积操作，TensorRT可能测试的算法包括：
+- **GEMM-based**：im2col + GEMM，适合大kernel
+- **Winograd**：$F(m \times m, r \times r)$，减少乘法次数
+- **FFT**：频域卷积，适合大kernel
+- **Direct**：直接卷积，适合小kernel和depthwise
+
+性能模型：
+$$T_{kernel} = T_{compute} + T_{memory} + T_{overhead}$$
+
+其中：
+- $T_{compute} = \frac{\text{FLOPs}}{\text{Peak TFLOPS} \times \text{Utilization}}$
+- $T_{memory} = \frac{\text{Data Movement}}{\text{Bandwidth} \times \text{Efficiency}}$
+- $T_{overhead}$：kernel启动和同步开销
 
 ### 19.1.3 精度校准与混合精度推理
 
@@ -71,10 +139,50 @@ $$\text{KL divergence} = \sum_i P(i) \log \frac{P(i)}{Q(i)}$$
 选择使KL散度最小的量化阈值：
 $$T^* = \arg\min_T \text{KL}(P \| Q_T)$$
 
-混合精度策略：
+**校准算法详细步骤**：
+
+1. **收集激活值统计**：
+   - 运行代表性输入through网络
+   - 为每层收集激活值直方图
+   - 统计范围$[\text{min}, \text{max}]$和分布
+
+2. **候选阈值生成**：
+   对于范围$[0, \text{max}]$，生成候选阈值集合：
+   $$T \in \{i \times \frac{\text{max}}{N} | i = 128, 129, ..., N\}$$
+   
+   其中$N$是直方图的bin数（通常2048）
+
+3. **KL散度计算**：
+   对每个候选阈值$T$：
+   - 将$[-T, T]$映射到$[-127, 127]$
+   - 计算量化后的分布$Q_T$
+   - 计算$\text{KL}(P \| Q_T)$
+
+4. **最优阈值选择**：
+   $$\text{scale} = \frac{T^*}{127}, \quad \text{zero\_point} = 0$$
+
+**混合精度策略**：
 - 对精度敏感的层保持FP16/FP32
 - 计算密集层使用INT8
 - 动态范围大的层使用更高精度
+
+精度分配的启发式规则：
+1. **首尾层保护**：第一层和最后一层通常保持高精度
+2. **小通道保护**：通道数少的层（如bottleneck）保持高精度
+3. **激活值范围**：动态范围超过阈值的层使用FP16
+   $$\text{Dynamic Range} = \frac{\text{max}(|x|)}{\text{mean}(|x|)} > \tau$$
+
+**性能与精度权衡**：
+
+定义效用函数：
+$$U = \alpha \times \text{Speedup} - \beta \times \text{Accuracy Loss}$$
+
+其中：
+- Speedup = $\frac{T_{FP32}}{T_{mixed}}$
+- Accuracy Loss = $|\text{Acc}_{FP32} - \text{Acc}_{mixed}|$
+
+TensorRT的自动混合精度会搜索最优的层精度分配：
+$$\text{Precision}^* = \arg\max_{\text{config}} U(\text{config})$$
 
 ### 19.1.4 动态形状支持与优化
 
@@ -92,6 +200,62 @@ $$\text{Memory} = \max(\text{workspace}_{\text{shape}}) \text{ for all valid sha
 对于序列模型（如BERT），动态长度优化尤为重要：
 - 根据实际序列长度调整计算
 - 避免padding带来的无效计算
+
+**Profile定义的三个关键维度**：
+
+1. **Min Shapes**：网络必须支持的最小输入尺寸
+2. **Opt Shapes**：优化目标形状，kernel选择基于此
+3. **Max Shapes**：网络必须支持的最大输入尺寸
+
+数学表示：
+$$\text{Profile} = \{\text{shape} | \text{min}_i \leq \text{shape}_i \leq \text{max}_i, \forall i\}$$
+
+**动态形状下的优化策略**：
+
+1. **Kernel选择策略**：
+   - 基于opt shape选择最优kernel
+   - 运行时检查是否适用于实际shape
+   - 必要时fallback到通用kernel
+
+2. **内存管理优化**：
+   $$\text{Allocated Memory} = f(\text{max shape}) + \text{safety margin}$$
+   
+   但实际使用基于当前shape：
+   $$\text{Used Memory} = f(\text{current shape})$$
+
+3. **Padding优化**：
+   对于NLP模型的序列长度$L$：
+   - 传统方法：pad到最大长度$L_{max}$
+   - TensorRT：仅计算实际长度$L_{actual}$
+   
+   计算节省比例：
+   $$\text{Savings} = 1 - \frac{L_{actual}}{L_{max}}$$
+
+**Shape-specific优化示例**：
+
+对于可变batch size的场景：
+```
+Profile 1: batch ∈ [1, 4]    → 优化for latency
+Profile 2: batch ∈ [8, 32]   → 优化for throughput  
+Profile 3: batch ∈ [64, 128] → 优化for batch效率
+```
+
+每个profile可以有不同的：
+- Kernel选择（小batch用direct conv，大batch用GEMM）
+- 内存布局（NCHW vs NHWC）
+- 并行策略（thread per sample vs cooperative groups）
+
+**动态形状的性能模型**：
+
+$$T(shape) = T_{kernel}(shape) + T_{memory}(shape) + T_{switch}$$
+
+其中$T_{switch}$是profile切换开销，包括：
+- Kernel重选择
+- 内存重分配（如果需要）
+- 执行计划更新
+
+优化目标是最小化平均延迟：
+$$\min \mathbb{E}_{shape \sim P(shape)}[T(shape)]$$
 
 ## 19.2 TVM编译优化技术
 
@@ -114,6 +278,46 @@ $$C[i,j] = \sum_k A[i,k] \times B[k,j]$$
 TVM将其分解为：
 - **计算（Compute）**：定义了什么要计算
 - **调度（Schedule）**：定义了如何计算
+
+**分层IR设计的优势**：
+
+1. **Relay IR**（图级别）：
+   - 函数式、静态类型
+   - 支持控制流、递归
+   - 自动微分、量化等高级特性
+   
+   类型系统：
+   $$\tau ::= \text{Tensor}[\tau_{\text{elem}}, \text{shape}] \mid \tau_1 \rightarrow \tau_2 \mid \text{Tuple}[\tau_1, ..., \tau_n]$$
+
+2. **TE（Tensor Expression）**（算子级别）：
+   - 声明式的计算描述
+   - 与具体实现解耦
+   - 支持复杂索引和约简
+   
+   表达能力包括：
+   $$\text{compute}(\text{shape}, \lambda \text{indices}: \text{expression})$$
+
+3. **TIR（Tensor IR）**（循环级别）：
+   - 显式的循环嵌套
+   - 内存分配和同步
+   - 硬件intrinsics
+   
+   循环结构：
+   $$\text{for } i \in [0, N): \text{for } j \in [0, M): \text{body}$$
+
+**编译流程的数学模型**：
+
+$$\text{Model} \xrightarrow{\text{Import}} \text{Relay} \xrightarrow{\text{Lower}} \text{TE} \xrightarrow{\text{Schedule}} \text{TIR} \xrightarrow{\text{CodeGen}} \text{Binary}$$
+
+每个转换保证语义等价：
+$$\text{Semantics}(\text{IR}_i) = \text{Semantics}(\text{Transform}(\text{IR}_i))$$
+
+**优化机会的识别**：
+
+在每个IR层级，TVM识别不同的优化机会：
+- **Relay**：算子融合、常量折叠、死代码消除
+- **TE**：计算模式匹配、代数简化
+- **TIR**：循环优化、向量化、内存布局变换
 
 ### 19.2.2 张量表达式与调度原语
 
@@ -144,6 +348,65 @@ C = te.compute((M, N), lambda i, j: te.sum(A[i, k] * B[k, j], axis=k))
 - `parallel`：CPU多线程并行
 - `vectorize`：SIMD向量化
 - `unroll`：循环展开
+
+**调度原语的数学语义**：
+
+1. **Split变换**：
+   原始循环空间：$\{i | 0 \leq i < N\}$
+   
+   分解后：
+   $$\{(i_o, i_i) | 0 \leq i_o < \lceil N/f \rceil, 0 \leq i_i < f, i_o \times f + i_i < N\}$$
+   
+   访问顺序从$i$变为$(i_o, i_i)$的字典序
+
+2. **Tile优化**（组合split）：
+   对于2D计算，tile大小$(t_i, t_j)$：
+   $$\begin{aligned}
+   &\text{for } i_o \in [0, \lceil M/t_i \rceil): \\
+   &\quad \text{for } j_o \in [0, \lceil N/t_j \rceil): \\
+   &\quad\quad \text{for } i_i \in [0, t_i): \\
+   &\quad\quad\quad \text{for } j_i \in [0, t_j):
+   \end{aligned}$$
+
+3. **Compute At语义**：
+   将计算$B = f(A)$移动到消费者$C = g(B)$的某个循环层级：
+   
+   原始：
+   ```
+   for i in [0, N):
+     B[i] = f(A[i])
+   for j in [0, M):  
+     C[j] = g(B[...])
+   ```
+   
+   compute_at后：
+   ```
+   for j in [0, M):
+     compute necessary B[...]
+     C[j] = g(B[...])
+   ```
+
+**内存层次优化**：
+
+Cache引入的性能模型：
+$$T_{total} = T_{compute} + T_{memory} = T_{compute} + \sum_{level} \frac{\text{Misses}_{level} \times \text{Line Size}}{\text{Bandwidth}_{level}}$$
+
+优化目标：最小化高层级cache miss。
+
+对于矩阵乘法的多级tiling：
+- L1 tile: $(32, 32)$ - 适配L1 cache
+- L2 tile: $(256, 256)$ - 适配L2 cache  
+- L3 tile: $(1024, 1024)$ - 适配L3 cache
+
+**向量化与数据布局**：
+
+向量化要求连续内存访问，可能需要布局变换：
+$$\text{Layout Transform: } A[i][j] \rightarrow A[i/V][j][i\%V]$$
+
+其中$V$是向量宽度（如AVX-512的16个float）。
+
+向量化效率：
+$$\eta_{vec} = \frac{\text{Vectorized Operations}}{\text{Total Operations}} \times \frac{\text{Vector Width}}{\text{Actual Vector Utilization}}$$
 
 ### 19.2.3 AutoTVM与AutoScheduler
 
