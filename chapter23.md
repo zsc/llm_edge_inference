@@ -24,6 +24,21 @@
 - 语言生成：~14 GFLOPs/token（假设序列长度1024）
 - 总计算量随生成长度线性增长
 
+详细计算分析：
+对于224×224的输入图像，ViT-L/14的计算可分解为：
+- Patch Embedding: 3×16×16×1024 ≈ 0.8M FLOPs
+- Position Encoding: 可忽略（预计算）
+- Self-Attention (24层): 24×2×197×1024² ≈ 101G FLOPs
+- FFN (24层): 24×2×197×1024×4096 ≈ 404G FLOPs
+- Layer Norm: 24×2×197×1024 ≈ 10M FLOPs
+总计约505G FLOPs
+
+语言模型的计算分解（以7B模型为例）：
+- Embedding查表：可忽略
+- Self-Attention: L×2×n×d² ≈ L×2×n×4096² FLOPs
+- FFN: L×2×n×d×4d ≈ L×8×n×4096² FLOPs
+其中L是层数（如32），n是序列长度
+
 **Flamingo-style架构**（如Flamingo、IDEFICS）：
 - 视觉编码器：约20-30%的计算量
 - Perceiver Resampler：约10-15%的计算量
@@ -31,12 +46,37 @@
 
 关键观察：Perceiver Resampler通过降低视觉token数量（如从256降至64），显著减少了后续cross-attention的计算量。
 
+Perceiver的计算量分析：
+- Cross-attention: n_queries × n_visual × d = 64 × 256 × 1024 ≈ 17M FLOPs
+- Self-attention: 6层 × 2 × 64 × 1024² ≈ 0.8G FLOPs
+- FFN: 6层 × 2 × 64 × 1024 × 4096 ≈ 3.2G FLOPs
+相比直接使用256个视觉token，计算量减少约75%
+
 **BLIP-style架构**（如BLIP-2、InstructBLIP）：
 - 冻结的视觉编码器：约15-25%的计算量
 - Q-Former：约10-20%的计算量
 - 冻结的LLM：约55-75%的计算量
 
 Q-Former的设计巧妙地平衡了性能和效率，通过少量可学习查询（如32个）来提取视觉信息。
+
+Q-Former计算细节：
+- 查询数量：32个可学习queries
+- 交互层数：通常12层
+- 每层包含：
+  - Self-attention (queries): 32×32×768 ≈ 0.8M FLOPs
+  - Cross-attention (query-image): 32×257×768 ≈ 6.3M FLOPs
+  - FFN: 2×32×768×3072 ≈ 151M FLOPs
+总计约1.9G FLOPs，仅占整体计算的很小部分
+
+**LLaVA-style架构**（如LLaVA、LLaVA-1.5）：
+- 视觉编码器：固定计算量，与图像大小相关
+- 简单投影层：< 1%的计算量
+- 语言模型：> 95%的计算量（对于长序列）
+
+LLaVA的极简设计使其特别适合边缘部署：
+- 仅需一个线性投影层：336×336×3 → 576×1024 → 576×4096
+- 投影计算：576×1024×4096 ≈ 2.4G FLOPs
+- 相比语言模型的数百G FLOPs，几乎可忽略
 
 ### 23.1.2 计算瓶颈识别
 
@@ -48,9 +88,27 @@ Q-Former的设计巧妙地平衡了性能和效率，通过少量可学习查询
 - ViT的计算量增加4倍（patch数量增加4倍）
 - 内存占用增加约3.5倍（考虑激活值存储）
 
+具体数值分析（以ViT-L为例）：
+- 224×224: 197个patches，505G FLOPs
+- 448×448: 784个patches，2020G FLOPs
+- 896×896: 3136个patches，8080G FLOPs
+
+内存占用分析：
+- 激活值存储：batch_size × num_patches × hidden_dim × num_layers
+- 224×224: 1×197×1024×24×4 bytes ≈ 77MB
+- 448×448: 1×784×1024×24×4 bytes ≈ 307MB
+- KV cache额外开销：2×num_layers×num_patches×hidden_dim
+
 优化策略：
 - 动态分辨率调整：根据图像内容复杂度选择合适分辨率
 - 局部高分辨率处理：仅对感兴趣区域使用高分辨率
+- 多尺度特征融合：不同分辨率特征hierarchical处理
+
+**窗口注意力优化**：
+将全局注意力改为窗口注意力可显著降低计算量：
+- 全局：O(n²d)，其中n是patch数
+- 窗口（w×w）：O(nw²d)，计算量降低为原来的w²/n
+- 对于448×448图像，使用7×7窗口，计算量降低16倍
 
 **2. 长序列cross-attention**
 
@@ -60,9 +118,72 @@ Q-Former的设计巧妙地平衡了性能和效率，通过少量可学习查询
 
 其中L_text是文本长度，L_visual是视觉token数量，d是特征维度。
 
+数值示例（Flamingo-9B）：
+- 文本长度：2048 tokens
+- 视觉tokens：256（来自Perceiver）
+- 隐藏维度：4096
+- Cross-attention层数：32层中的8层
+- 单层计算：2048×256×4096×2 ≈ 4.3G FLOPs
+- 总计算量：8×4.3G ≈ 34.4G FLOPs
+
+**稀疏化优化**：
+1. Top-k注意力：每个文本token仅关注最相关的k个视觉token
+   - 计算量降低：L_visual/k倍
+   - 典型k=32时，降低8倍
+
+2. 分层注意力：底层使用局部注意力，顶层使用全局注意力
+   - 底层（1-24层）：局部窗口
+   - 顶层（25-32层）：全局注意力
+   - 总体计算量降低60-70%
+
 **3. 重复的视觉编码**
 
 在多轮对话场景中，同一张图片可能被多次引用，导致重复编码。
+
+实际案例分析：
+- 用户上传一张图片，进行5轮问答
+- 每轮都需要：视觉编码（505G FLOPs）
+- 总计算量：5×505G = 2.5T FLOPs
+- 实际仅需：1×505G FLOPs + 缓存读取
+
+**缓存策略设计**：
+1. 特征级缓存：
+   - 缓存视觉编码器输出：[batch, num_patches, hidden_dim]
+   - 内存占用：约300MB per image（FP16）
+   - 命中率：多轮对话场景下>80%
+
+2. 注意力级缓存：
+   - 缓存cross-attention的KV：[num_layers, num_patches, hidden_dim]
+   - 内存占用：约1.2GB per image
+   - 适用于固定prompt的场景
+
+3. 语义级缓存：
+   - 缓存高级语义特征：[num_concepts, concept_dim]
+   - 内存占用：约10MB per image
+   - 适用于相似图片的快速检索
+
+**4. 批处理效率低下**
+
+不同模态的序列长度差异导致padding浪费：
+- 图像：固定197/576个patches
+- 文本：变长10-2048 tokens
+- 简单padding导致最高90%的计算浪费
+
+**动态批处理优化**：
+1. 分桶策略（Bucketing）：
+   - 将相似长度的序列分组
+   - 桶大小：[128, 256, 512, 1024, 2048]
+   - 平均填充率从30%提升到85%
+
+2. 连续批处理（Continuous Batching）：
+   - 不同请求的计算可以交错进行
+   - 新请求可以填充已完成请求的空位
+   - 吞吐量提升2-3倍
+
+3. 序列打包（Sequence Packing）：
+   - 将多个短序列打包成一个长序列
+   - 使用attention mask区分不同序列
+   - GPU利用率提升40-60%
 
 ### 23.1.3 边缘优化策略
 
@@ -81,6 +202,29 @@ Q-Former的设计巧妙地平衡了性能和效率，通过少量可学习查询
 - 提升2-3倍的推理速度
 - 精度损失控制在2%以内
 
+**详细量化方案**：
+
+视觉编码器量化策略：
+- Patch Embedding: INT8 (输入已归一化)
+- QKV投影: INT8 weights, FP16 accumulation
+- Attention计算: FP16 (保持精度)
+- FFN第一层: INT8
+- FFN第二层: INT8 with FP16 residual
+- 量化校准: 使用1000张代表性图片
+
+语言模型混合量化：
+- Embedding层: INT8 (查表操作)
+- Attention weights: INT4 (使用group-wise量化)
+- Attention激活: INT8
+- FFN weights: INT4 (敏感度低)
+- FFN激活: INT8
+- 输出层: FP16 (影响生成质量)
+
+量化误差补偿：
+- 使用learned scale factors
+- 每128个通道一个scale
+- 动态范围调整：根据激活分布在线更新
+
 **2. 计算图优化**
 
 通过分析VLM的计算图，我们可以进行以下优化：
@@ -88,6 +232,34 @@ Q-Former的设计巧妙地平衡了性能和效率，通过少量可学习查询
 - **算子融合**：将视觉编码器的Conv-BN-ReLU融合为单个算子
 - **内存复用**：在视觉编码完成后立即释放中间激活值
 - **预计算优化**：将位置编码等固定计算提前完成
+
+**具体融合策略**：
+
+1. Vision Transformer优化：
+   - QKV计算融合：3个矩阵乘法 → 1个矩阵乘法
+   - Scale-Softmax融合：避免中间结果materialization
+   - LayerNorm-Linear融合：减少内存访问
+   - 总体kernel数量减少70%
+
+2. 跨模态计算优化：
+   - Projection-LayerNorm融合
+   - Cross-attention的QK计算与visual features预计算
+   - 减少40%的内存带宽需求
+
+3. 内存复用模式：
+   ```
+   Phase 1: 视觉编码
+   - 分配: vision_buffer (300MB)
+   - 计算: patches → features
+   
+   Phase 2: 特征对齐
+   - 复用: vision_buffer → alignment_buffer
+   - 仅保留: final_features (50MB)
+   
+   Phase 3: 语言生成
+   - 释放: 所有视觉相关buffer
+   - 专注: KV cache管理
+   ```
 
 **3. 自适应计算分配**
 
@@ -105,6 +277,61 @@ if text_length < threshold:
 else:
     use_full_lm_layers()
 ```
+
+**复杂度评估指标**：
+
+图像复杂度计算：
+```
+1. 边缘密度: edge_score = mean(sobel_filter(image))
+2. 纹理复杂度: texture_score = std(gabor_filter(image))
+3. 颜色多样性: color_score = num_unique_colors / total_pixels
+4. 综合分数: complexity = w1*edge + w2*texture + w3*color
+```
+
+基于复杂度的模型选择：
+- Low (< 0.3): MobileViT-XXS (2M params) + 1.3B LLM
+- Medium (0.3-0.7): MobileViT-S (5M params) + 3B LLM
+- High (> 0.7): ViT-B/16 (86M params) + 7B LLM
+
+**早停机制（Early Exit）**：
+
+在Transformer层中插入分类头，根据置信度决定是否继续：
+```
+for i, layer in enumerate(layers):
+    x = layer(x)
+    if i in exit_points:
+        confidence = exit_heads[i](x)
+        if confidence > threshold:
+            return early_exit_projection(x)
+```
+
+实验结果：
+- 简单图像：平均在第8层退出（共24层）
+- 复杂图像：完整24层
+- 平均加速：1.8倍
+- 精度损失：< 1%
+
+**4. 硬件感知优化**
+
+针对不同边缘硬件的特定优化：
+
+**ARM Cortex系列**：
+- 使用NEON指令集加速
+- INT8 GEMM优化（使用sdot指令）
+- 缓存行对齐（64字节）
+- 预取优化（提前2-3个缓存行）
+
+**高通Hexagon DSP**：
+- HVX向量扩展利用
+- 双精度累加器避免溢出
+- 循环展开度=4（最优）
+- 使用专用的nn_graph API
+
+**Apple Neural Engine**：
+- 使用Core ML的VLM优化
+- 16x16 tile计算
+- 避免动态shape（预定义buckets）
+- 利用统一内存架构
 
 ### 23.1.4 实际部署案例分析
 
@@ -193,15 +420,35 @@ C_v/C_l ≈ α/β · (1 + ε)
 
 其中d_v是视觉特征维度，d_l是语言特征维度，n是token数量。
 
+实际案例分析（CLIP → GPT）：
+- 输入：CLIP ViT-B/32输出，d_v = 512, n = 49 (7×7 patches)
+- 输出：GPT-2嵌入空间，d_l = 768
+- 参数量：512 × 768 = 393,216
+- 单次前向计算：49 × 512 × 768 × 2 = 38.5M FLOPs
+- 内存占用（FP16）：0.75MB weights + 0.07MB activations
+
 **2. MLP投影**
 使用多层感知机进行非线性映射：
 
 ```
 计算复杂度：O(d_v × d_h × n + d_h × d_l × n)
-参数量：d_v × d_h + d_h × d_l
+参数量：d_v × d_h + d_h × d_l + 2×d_h (bias)
 ```
 
 典型配置：d_h = 4 × d_l（类似于FFN的扩展比例）
+
+深度分析：
+- 两层MLP：d_v → d_h → d_l
+- 激活函数：GELU或SiLU（计算成本约为线性层的10%）
+- 示例（BLIP-2）：
+  - Layer 1: 1408 → 4096 (5.77M params)
+  - Layer 2: 4096 → 768 (3.15M params)
+  - 总计算量：n × (1408×4096 + 4096×768) × 2 = n × 17.92M FLOPs
+
+**Layer Normalization开销**：
+- 计算：2×n×d_h（均值和方差计算）
+- 参数：2×d_h（scale和bias）
+- 相对于主计算通常< 1%
 
 **3. Cross-attention对齐**
 通过注意力机制实现更复杂的特征交互：
@@ -213,6 +460,25 @@ C_v/C_l ≈ α/β · (1 + ε)
 
 其中n_v是视觉token数，n_l是语言token数，h是注意力头数。
 
+详细计算分解：
+1. Query投影：n_l × d × d = n_l × d²
+2. Key投影：n_v × d × d = n_v × d²
+3. Value投影：n_v × d × d = n_v × d²
+4. QK^T计算：n_l × d × n_v = n_l × n_v × d
+5. Softmax：n_l × n_v（相对较小）
+6. Attention加权：n_l × n_v × d
+7. 输出投影：n_l × d × d = n_l × d²
+
+总计算量：3d² × (n_l + n_v) + 2 × n_l × n_v × d
+
+实际例子（Flamingo）：
+- n_v = 256 (from Perceiver)
+- n_l = 2048 (text sequence)
+- d = 1024
+- h = 16
+- 单层计算：~1.1G FLOPs
+- 8层cross-attention：~8.8G FLOPs
+
 **4. Perceiver-style对齐**
 使用固定数量的可学习查询来提取视觉信息：
 
@@ -222,6 +488,45 @@ C_v/C_l ≈ α/β · (1 + ε)
 ```
 
 关键优势：n_q << n_v，显著降低计算量。
+
+Perceiver架构细节：
+- Learnable queries：n_q = 64, d = 1024
+- 交替进行cross-attention和self-attention
+- 通常6层，3层cross + 3层self
+- 每层计算：
+  - Cross: 64 × 256 × 1024 × 2 = 33.6M FLOPs
+  - Self: 64 × 64 × 1024 × 2 = 8.4M FLOPs
+- 总计算：(33.6M × 3 + 8.4M × 3) = 126M FLOPs
+
+**5. Qformer对齐**
+BLIP-2引入的Query Transformer：
+
+```
+结构：共享的self-attention + 可选的cross-attention
+参数量：32 queries × 768 dim × 12 layers
+计算模式：
+- Image-text matching: bi-directional self-attention
+- Image-grounded text generation: causal self-attention
+- Image captioning: cross-attention with frozen image features
+```
+
+计算分析：
+- 32个可学习queries
+- 12层transformer，每层包含：
+  - Self-attention: 32 × 32 × 768 = 0.79M FLOPs
+  - Cross-attention: 32 × 257 × 768 = 6.3M FLOPs
+  - FFN: 2 × 32 × 768 × 3072 = 150.9M FLOPs
+- 单个样本总计算：~1.9G FLOPs
+
+**计算效率对比**：
+
+| 方法 | 参数量 | FLOPs/sample | 内存峰值 | 适用场景 |
+|------|--------|--------------|----------|----------|
+| 线性投影 | 0.4M | 38.5M | 1MB | 资源极限场景 |
+| MLP投影 | 8.9M | 877M | 18MB | 一般边缘设备 |
+| Cross-attention | 3.1M | 1.1G/layer | 32MB | 服务器部署 |
+| Perceiver | 0.8M | 126M | 5MB | 平衡选择 |
+| Qformer | 30M | 1.9G | 60MB | 高性能需求 |
 
 ### 23.2.2 轻量级对齐网络设计
 
