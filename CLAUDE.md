@@ -9,10 +9,6 @@
 包含边缘侧通用编译如 tensorrt, OpenPPL/PPQ
 组织为 index.md + chapter1.md + ...
 
-## 工具说明
-当需要时，可以通过 `gemini -p "深入回答：<要问的问题> -m gemini-2.5-pro"` 来获取 gemini-2.5-pro 的参考意见(gemini 系只问 gemini-2.5-pro 不问别人)
-当需要时，可以通过 `echo "<要问的问题>"|llm -m 4.1 来获取 gpt-4.1 的参考意见
-
 ## 章节结构要求
 
 每个章节应包含：
