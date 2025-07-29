@@ -125,6 +125,180 @@ MobileNetV3针对不同平台进行了定制：
 
 通过NAS找到的架构在ImageNet上达到75.2%的top-1精度，同时在Pixel手机上的延迟仅为66ms。
 
+### 25.1.5 超网络训练策略
+
+**1. 权重共享机制**
+
+超网络（SuperNet）包含所有可能的子网络，通过权重共享加速搜索：
+
+$$\mathcal{W} = \{W^{(i,j)}_o | (i,j) \in \mathcal{E}, o \in \mathcal{O}\}$$
+
+其中$\mathcal{E}$是边集合，$\mathcal{O}$是操作集合。
+
+单路径采样训练：
+$$\mathcal{L}_{train} = \mathbb{E}_{\alpha \sim \mathcal{U}(\mathcal{A})}[\mathcal{L}(x, y; W_\alpha)]$$
+
+其中$W_\alpha$是架构$\alpha$对应的权重子集。
+
+**2. 公平性训练（FairNAS）**
+
+不同操作的训练难度不同，需要确保公平性：
+
+期望训练策略：
+$$p(o) = \frac{\exp(\lambda \cdot \mathcal{L}_o)}{\sum_{o' \in \mathcal{O}} \exp(\lambda \cdot \mathcal{L}_{o'})}$$
+
+其中$\mathcal{L}_o$是操作$o$的平均损失，$\lambda$控制采样偏好。
+
+**3. 渐进收缩（Progressive Shrinking）**
+
+逐步减少搜索空间，提高训练稳定性：
+
+温度退火：
+$$p_t(o) = \frac{\exp(\alpha_o / T_t)}{\sum_{o'} \exp(\alpha_{o'} / T_t)}$$
+
+其中$T_t = T_0 \cdot \exp(-t/\tau)$是退火温度。
+
+**4. 知识蒸馏加速**
+
+使用教师网络指导超网络训练：
+
+$$\mathcal{L} = (1-\lambda)\mathcal{L}_{CE} + \lambda \mathcal{L}_{KD}$$
+
+其中：
+$$\mathcal{L}_{KD} = \tau^2 \cdot KL(p_{student} || p_{teacher})$$
+
+### 25.1.6 早期停止与代理任务
+
+**1. 代理数据集选择**
+
+使用小规模数据集加速搜索：
+
+相关性度量：
+$$\rho = \frac{\text{Cov}(R_{proxy}, R_{full})}{\sigma_{proxy} \cdot \sigma_{full}}$$
+
+其中$R$表示架构排名。
+
+典型代理设置：
+- ImageNet → ImageNet-100（100类子集）
+- CIFAR-10 → 缩减训练集（10%）
+- 训练epoch：完整训练的1/10
+
+**2. 性能预测器**
+
+基于部分训练曲线预测最终性能：
+
+学习曲线建模：
+$$\text{Acc}(t) = a - b \cdot t^{-c}$$
+
+其中$a$是渐近精度，$b, c$是曲线参数。
+
+基于前k个epoch预测：
+$$\hat{a} = \argmin_a \sum_{i=1}^k ||\text{Acc}(i) - (a - b \cdot i^{-c})||^2$$
+
+**3. 早期拒绝策略**
+
+快速淘汰低质量架构：
+
+贝叶斯优化框架：
+$$\alpha(x) = \frac{\mu(x) - \xi}{\sigma(x)}$$
+
+其中$\mu(x), \sigma(x)$是高斯过程的均值和方差，$\xi$是探索参数。
+
+中位数剪枝：
+- 训练到t epoch时，淘汰性能低于中位数的架构
+- 资源重新分配给剩余架构
+- 典型设置：t ∈ {10, 20, 30} epochs
+
+### 25.1.7 可微分搜索的稳定性改进
+
+**1. 离散化偏差问题**
+
+DARTS等方法存在的问题：
+- 连续松弛与离散化之间的gap
+- 倾向选择参数量少的操作（如skip connection）
+
+改进方法：
+
+PC-DARTS（部分通道连接）：
+$$\bar{o}^{(i,j)} = \sum_{o} \frac{\exp(\alpha_o^{(i,j)})}{\sum_{o'} \exp(\alpha_{o'}^{(i,j)})} \cdot o(x^{(i)}_{1/K})$$
+
+只对1/K的通道进行架构搜索，减少内存消耗和过拟合。
+
+**2. 公平性改进（FairDARTS）**
+
+引入Sigmoid函数替代Softmax：
+$$p_o = \sigma(\alpha_o) = \frac{1}{1 + \exp(-\alpha_o)}$$
+
+独立选择每个操作，避免竞争导致的不公平。
+
+**3. 鲁棒性增强（R-DARTS）**
+
+引入扰动训练提高稳定性：
+
+$$\min_\alpha \mathcal{L}_{val}(w^*(\alpha) + \epsilon, \alpha)$$
+
+其中$\epsilon \sim \mathcal{N}(0, \sigma^2 I)$是高斯噪声。
+
+Hessian正则化：
+$$\mathcal{R}(\alpha) = ||\nabla^2_\alpha \mathcal{L}_{val}||_F$$
+
+减少架构参数对验证损失的二阶敏感度。
+
+### 25.1.8 大语言模型的NAS应用
+
+**1. Transformer架构搜索空间**
+
+针对LLM的搜索维度：
+- 注意力头数：{4, 8, 12, 16}
+- FFN扩展比：{2, 3, 4}
+- 层数分配：不同阶段的深度
+- 注意力模式：{全局, 局部, 稀疏}
+
+**2. 自回归特性的考虑**
+
+KV Cache优化的架构设计：
+
+内存消耗建模：
+$$M_{KV} = 2 \times L \times H \times D \times S \times B$$
+
+其中：
+- L：层数
+- H：头数
+- D：每头维度
+- S：序列长度
+- B：批大小
+
+搜索时的约束：
+$$M_{KV} + M_{weights} + M_{activation} \leq M_{total}$$
+
+**3. 混合精度架构搜索**
+
+不同层使用不同精度：
+
+搜索空间扩展：
+$$\mathcal{S} = \mathcal{S}_{arch} \times \mathcal{S}_{precision}$$
+
+其中$\mathcal{S}_{precision} = \{INT4, INT8, FP16\}^L$
+
+联合优化目标：
+$$\min_{\alpha, \beta} -\text{PPL}(\alpha, \beta) + \lambda \cdot \text{BitOps}(\alpha, \beta)$$
+
+其中$\beta$是精度配置，BitOps是位操作数。
+
+**4. 实例：GPT模型的自动压缩**
+
+搜索策略：
+1. 固定总参数量预算（如7B）
+2. 搜索层数、宽度、注意力配置
+3. 考虑推理内存和计算效率
+4. 使用困惑度（PPL）作为质量指标
+
+典型发现：
+- 浅而宽的架构在边缘设备上更高效
+- 交替使用全局和局部注意力
+- 早期层可以使用更低精度
+- FFN可以比注意力层更激进地压缩
+
 ## 25.2 硬件感知搜索空间
 
 硬件感知的NAS不仅要考虑理论计算量（FLOPs），更要关注实际硬件上的执行效率。不同硬件平台有着截然不同的特性：CPU注重缓存友好性，GPU偏好高并行度操作，而专用加速器则有固定的操作模式。本节探讨如何将这些硬件特性融入搜索空间设计。
@@ -289,6 +463,202 @@ MCUNet专门为微控制器设计的架构搜索：
 - 能耗目标：<1mJ per inference
 
 通过联合优化架构和执行调度，在ImageNet的子集上达到70.7%精度，同时满足严格的资源约束。
+
+### 25.2.5 特定硬件的操作分解
+
+**1. ARM NEON指令集优化**
+
+ARM CPU的SIMD优化考虑：
+
+向量化效率建模：
+$$\eta_{vec} = \frac{\text{Theoretical SIMD Ops}}{\text{Actual Vector Ops}} \times \frac{\text{Vector Width}}{\text{Data Width}}$$
+
+搜索空间约束：
+- 通道数应为4的倍数（float32）或8的倍数（float16）
+- 卷积核大小影响寄存器分配效率
+- 深度可分离卷积的向量化模式：
+  ```
+  Depthwise: 每个向量处理4个空间位置
+  Pointwise: 每个向量处理4个输出通道
+  ```
+
+内存访问模式优化：
+$$\text{Cache Miss Rate} = 1 - \frac{\text{Reused Data}}{\text{Total Access}} \times \min(1, \frac{\text{Working Set}}{\text{Cache Size}})$$
+
+**2. GPU Warp调度优化**
+
+GPU特定的并行度考虑：
+
+占用率（Occupancy）计算：
+$$\text{Occupancy} = \frac{\text{Active Warps}}{\text{Max Warps}} = \frac{\text{Blocks} \times \text{Warps per Block}}{\text{SM Count} \times \text{Max Warps per SM}}$$
+
+寄存器压力约束：
+$$R_{per\_thread} \times T_{per\_block} \leq R_{max\_per\_SM}$$
+
+共享内存约束：
+$$S_{per\_block} \leq S_{max\_per\_SM}$$
+
+搜索空间设计原则：
+- Tile大小应匹配warp大小（32）
+- 避免bank conflict：stride应与bank数互质
+- 利用tensor core：维度应为8的倍数（INT8）或16的倍数（FP16）
+
+**3. DSP向量处理器优化**
+
+Hexagon HVX的特殊考虑：
+
+向量寄存器宽度：1024位
+$$\text{Elements per Vector} = \frac{1024}{\text{Bits per Element}}$$
+
+VLIW并行度：
+- 最多4条向量指令并行
+- 2条标量指令
+- 1条加载/存储指令
+
+循环展开因子优化：
+$$\text{Unroll Factor} = \min(\frac{\text{Vector Length}}{\text{Data Width}}, \frac{\text{Available Registers}}{2})$$
+
+**4. NPU固定功能单元**
+
+专用加速器的约束建模：
+
+支持的操作集合：
+$$\mathcal{O}_{NPU} = \{\text{Conv2D}, \text{DepthwiseConv2D}, \text{FC}, \text{Pool}, \text{Activation}\}$$
+
+量化要求：
+- 权重：INT8或INT4
+- 激活：INT8或INT16
+- 累加器：INT32
+
+内存层次结构：
+```
+片上SRAM（快，小）→ 系统内存（中等）→ 外部存储（慢，大）
+```
+
+数据重用策略：
+$$\text{Reuse} = \min(\frac{\text{SRAM Size}}{\text{Working Set}}, 1) \times \text{Temporal Locality}$$
+
+### 25.2.6 内存带宽优化的架构设计
+
+**1. Roofline模型在NAS中的应用**
+
+计算强度定义：
+$$I = \frac{\text{FLOPs}}{\text{Memory Bytes}}$$
+
+性能上界：
+$$P = \min(P_{peak}, I \times BW)$$
+
+搜索空间中的操作分类：
+- 计算密集型（I > $P_{peak}/BW$）：标准卷积
+- 内存密集型（I < $P_{peak}/BW$）：深度卷积、激活函数
+
+优化策略：
+- 增加计算强度：使用更大的卷积核
+- 减少内存访问：操作融合、重计算
+
+**2. 数据布局感知的搜索**
+
+不同布局的性能影响：
+- NCHW：适合卷积操作
+- NHWC：适合深度卷积和内存连续访问
+- NC/HW/c：适合向量化处理
+
+布局转换开销：
+$$T_{transpose} = \frac{\text{Data Size}}{\text{Memory Bandwidth}} \times (1 + \text{Cache Miss Penalty})$$
+
+搜索策略：
+- 最小化布局转换次数
+- 在关键路径上保持一致的数据布局
+- 考虑硬件的原生布局偏好
+
+**3. 操作融合机会识别**
+
+可融合的操作模式：
+- Conv + BatchNorm + ReLU
+- Depthwise + Pointwise（MobileNet block）
+- Multi-head attention计算
+
+融合收益估算：
+$$\text{Speedup} = \frac{T_{separate}}{T_{fused}} = \frac{\sum T_i + \sum T_{mem}}{T_{compute} + T_{mem\_fused}}$$
+
+其中$T_{mem\_fused} < \sum T_{mem}$由于减少了中间结果的存储。
+
+**4. 批处理与流水线设计**
+
+动态批处理策略：
+$$B_{opt} = \argmax_B \frac{B \times \text{Throughput}(B)}{\text{Latency}(B)}$$
+
+满足内存约束：
+$$B \times (\text{Activation Memory} + \text{KV Cache}) \leq \text{Available Memory}$$
+
+流水线深度优化：
+- 计算与数据传输重叠
+- 多个请求的并行处理
+- 考虑缓存局部性
+
+### 25.2.7 编译器友好的架构设计
+
+**1. 图优化机会**
+
+搜索空间设计应考虑编译器优化：
+
+常量折叠：
+- 使用静态形状而非动态形状
+- 固定的超参数（如组数、扩展因子）
+
+算子融合模式：
+- 垂直融合：连续的element-wise操作
+- 水平融合：并行的相同操作
+- 复合模式：预定义的高效kernel
+
+死代码消除：
+- 避免总是为0的分支
+- 可静态确定的条件
+
+**2. 量化友好的设计原则**
+
+对称vs非对称量化：
+$$Q(x) = \text{clip}(\text{round}(\frac{x}{s}), q_{min}, q_{max})$$
+
+对称量化（zero-point = 0）：
+- 硬件实现简单
+- 适合权重量化
+
+非对称量化：
+- 更好的动态范围利用
+- 适合激活量化
+
+搜索空间考虑：
+- 激活函数的值域（ReLU6 vs ReLU）
+- BatchNorm的折叠可能性
+- 残差连接的量化累积误差
+
+**3. 内存分配优化**
+
+静态内存规划：
+$$M_{total} = \max_{t} \sum_{tensor \in Live(t)} \text{Size}(tensor)$$
+
+其中$Live(t)$是时刻t的活跃张量集合。
+
+内存复用策略：
+- In-place操作优先
+- 生命周期不重叠的张量共享内存
+- 考虑对齐要求（通常16字节或32字节）
+
+**4. 调度友好的拓扑结构**
+
+并行执行机会：
+- 多分支结构（如Inception）
+- 独立的子图
+- 异构执行（CPU+GPU）
+
+依赖链长度：
+$$\text{Critical Path} = \max_{\text{path}} \sum_{op \in path} T_{op}$$
+
+搜索目标：
+- 最小化关键路径长度
+- 最大化并行度
+- 平衡各执行单元负载
 
 ## 25.3 多目标优化策略
 
