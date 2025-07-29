@@ -499,3 +499,920 @@ FP32运算: 8.0x
    中批量（4-16）：平衡延迟和吞吐
    大批量（>16）：最大化吞吐量
    ```
+
+## 20.3 移动GPU优化（Mali/Adreno）
+
+移动GPU作为并行计算的重要加速器，在边缘AI推理中扮演着关键角色。Mali和Adreno分别是ARM和高通的GPU解决方案，两者在架构设计上有显著差异，需要针对性的优化策略。
+
+### 20.3.1 Mali GPU架构特点
+
+#### Bifrost/Valhall架构演进
+
+ARM Mali GPU经历了从Midgard到Bifrost，再到Valhall的架构演进：
+
+1. **Valhall架构核心特性**（Mali-G77及以后）：
+   - **执行引擎**：双发射架构，支持FMA和CVT并行
+   - **Warp大小**：16线程（相比NVIDIA的32）
+   - **寄存器文件**：64个32位寄存器/线程
+   - **共享内存**：16-32KB/核心
+
+2. **计算单元组织**：
+   ```
+   着色器核心布局：
+   - 1-16个着色器核心（取决于具体型号）
+   - 每核心2-3个执行引擎
+   - 共享L2 cache（256KB-4MB）
+   ```
+
+3. **内存层次结构**：
+   ```
+   寄存器 → L1 cache（16KB） → L2 cache → 系统内存
+   延迟：    1周期      4-6周期    20-40周期   100+周期
+   ```
+
+#### Mali GPU计算特性
+
+1. **浮点性能**：
+   ```
+   Mali-G710（旗舰）：
+   - FP32: ~1 TFLOPS
+   - FP16: ~2 TFLOPS
+   - INT8: ~4 TOPS
+   ```
+
+2. **内存带宽**：
+   - 理论带宽：依赖于系统内存（LPDDR5可达51.2GB/s）
+   - 有效带宽：通常为理论值的60-80%
+   - 带宽优化至关重要
+
+3. **功耗特性**：
+   ```
+   典型功耗（Mali-G78）：
+   - 峰值：5-8W
+   - 持续：2-4W
+   - 空闲：<100mW
+   ```
+
+### 20.3.2 Adreno GPU计算能力
+
+#### Adreno架构特点
+
+高通Adreno GPU采用独特的架构设计：
+
+1. **统一着色器架构**：
+   - **SP（Shader Processor）**：标量处理单元
+   - **TP（Texture Processor）**：纹理处理单元
+   - **RB（Render Backend）**：渲染后端
+
+2. **Adreno 7系列特性**（Adreno 730/740）：
+   ```
+   计算单元：6个SP（Adreno 740）
+   ALU配置：1024个ALU（64 ALU/EU × 16 EU）
+   Wave大小：64线程（2倍于Mali）
+   ```
+
+3. **FlexRender技术**：
+   - 可变速率着色（VRS）
+   - 动态分辨率渲染
+   - AI工作负载优化
+
+#### Adreno计算性能
+
+1. **理论性能**：
+   ```
+   Adreno 740：
+   - FP32: 2.0 TFLOPS
+   - FP16: 4.0 TFLOPS
+   - INT8: 8.0 TOPS
+   ```
+
+2. **AI专用指令**：
+   - **QSEED**：专用INT8点积指令
+   - **Tensor指令**：4×4矩阵运算
+   - **混合精度**：FP16累加到FP32
+
+### 20.3.3 OpenCL与Vulkan Compute
+
+#### OpenCL优化策略
+
+1. **工作组配置**：
+   ```
+   Mali最优配置：
+   - 工作组大小：64-128线程
+   - 使用local_size_hint优化
+   
+   Adreno最优配置：
+   - 工作组大小：128-256线程
+   - 考虑wave大小对齐
+   ```
+
+2. **内存访问模式**：
+   ```
+   合并访问模式：
+   thread[i] → memory[base + i * stride]
+   stride应为1以获得最佳性能
+   ```
+
+3. **向量化操作**：
+   ```
+   // 标量操作
+   float a = in[idx];
+   float b = weight[idx];
+   float c = a * b;
+   
+   // 向量化操作（4倍吞吐量）
+   float4 a = vload4(idx/4, in);
+   float4 b = vload4(idx/4, weight);
+   float4 c = a * b;
+   ```
+
+#### Vulkan Compute优势
+
+1. **更低的驱动开销**：
+   - 预编译着色器
+   - 显式内存管理
+   - 多队列提交
+
+2. **精确的同步控制**：
+   ```
+   Pipeline屏障：
+   - 执行依赖
+   - 内存依赖
+   - 图像布局转换
+   ```
+
+3. **子组操作**（Vulkan 1.1+）：
+   ```
+   subgroupAdd()：子组内归约
+   subgroupBroadcast()：广播
+   subgroupShuffle()：数据交换
+   ```
+
+### 20.3.4 Shader优化技术
+
+#### 计算着色器优化
+
+1. **寄存器压力管理**：
+   ```
+   优化前：32个float变量 → 溢出到内存
+   优化后：重用寄存器，保持在16个以内
+   ```
+
+2. **共享内存使用**：
+   ```
+   // 矩阵乘法tile优化
+   __local float tileA[TILE_SIZE][TILE_SIZE];
+   __local float tileB[TILE_SIZE][TILE_SIZE];
+   
+   // 协同加载
+   tileA[ly][lx] = A[gy * TILE_SIZE + ly][bx * TILE_SIZE + lx];
+   barrier(CLK_LOCAL_MEM_FENCE);
+   ```
+
+3. **循环展开**：
+   ```
+   #pragma unroll 4
+   for(int i = 0; i < N; i += 4) {
+       sum += a[i] * b[i];
+       sum += a[i+1] * b[i+1];
+       sum += a[i+2] * b[i+2];
+       sum += a[i+3] * b[i+3];
+   }
+   ```
+
+#### 特定优化技巧
+
+1. **Mali优化**：
+   - 使用FP16计算：2倍性能提升
+   - 避免分支：使用select()代替if-else
+   - 纹理缓存利用：适合权重存储
+
+2. **Adreno优化**：
+   - 利用标量/向量双路径
+   - 使用relative addressing
+   - 启用编译器自动向量化
+
+### 20.3.5 内存带宽优化
+
+#### 带宽瓶颈分析
+
+1. **算术强度计算**：
+   ```
+   算术强度 = FLOPs / 内存访问字节数
+   
+   矩阵乘法：O(n³) / O(n²) = O(n)
+   逐元素操作：O(n) / O(n) = O(1)
+   ```
+
+2. **带宽需求估算**：
+   ```
+   GEMM带宽需求：
+   M×K×sizeof(A) + K×N×sizeof(B) + M×N×sizeof(C)
+   
+   对于1024×1024×1024 FP16 GEMM：
+   需求：6GB/s（假设完美缓存）
+   ```
+
+#### 优化技术
+
+1. **数据重用**：
+   ```
+   分块策略：
+   - L2 cache大小：2MB
+   - 块大小：sqrt(2MB / 3 / sizeof(float)) ≈ 256
+   ```
+
+2. **纹理缓存利用**：
+   ```
+   // 权重通过纹理访问
+   __read_only image2d_t weights;
+   float4 w = read_imagef(weights, sampler, (int2)(x, y));
+   ```
+
+3. **压缩技术**：
+   - 使用FP16代替FP32：带宽减半
+   - 权重量化到INT8：带宽减少75%
+   - 稀疏存储：只传输非零值
+
+### 20.3.6 GPU-CPU协同计算
+
+#### 任务划分策略
+
+1. **计算密集型 → GPU**：
+   - 矩阵乘法
+   - 卷积操作
+   - 批量归一化
+
+2. **控制密集型 → CPU**：
+   - 动态形状处理
+   - 条件分支
+   - 小批量操作
+
+#### 异步执行模型
+
+1. **双缓冲模式**：
+   ```
+   时间线：
+   CPU: 准备batch[0] | 准备batch[1] | 准备batch[2]
+   GPU:              | 计算batch[0] | 计算batch[1]
+   ```
+
+2. **命令队列管理**：
+   ```
+   队列0：计算队列（矩阵运算）
+   队列1：传输队列（数据拷贝）
+   实现计算与传输重叠
+   ```
+
+#### 统一内存架构（UMA）优化
+
+1. **零拷贝技术**：
+   ```
+   // 避免CPU-GPU数据拷贝
+   cl_mem buffer = clCreateBuffer(
+       context,
+       CL_MEM_USE_HOST_PTR,
+       size,
+       host_ptr,
+       NULL
+   );
+   ```
+
+2. **缓存一致性**：
+   - Mali：ACE（AXI Coherency Extensions）
+   - Adreno：系统缓存参与
+   - 需要适当的内存屏障
+
+### 20.3.7 LLM推理的GPU优化实践
+
+#### Attention层GPU实现
+
+1. **Flash Attention适配**：
+   ```
+   分块大小选择：
+   - Mali：32×32（适配16线程warp）
+   - Adreno：64×64（适配64线程wave）
+   
+   共享内存使用：
+   - Q, K块：各8KB
+   - 部分和：4KB
+   - 总计：20KB（within限制）
+   ```
+
+2. **Softmax优化**：
+   ```
+   // 数值稳定的softmax
+   1. 找最大值（reduction）
+   2. 计算exp(x - max)
+   3. 求和（reduction）
+   4. 归一化
+   
+   使用子组操作加速reduction
+   ```
+
+#### KV Cache GPU管理
+
+1. **分页存储**：
+   ```
+   页大小：16KB（适配GPU cache line）
+   页表：存储在constant memory
+   动态分配：使用内存池
+   ```
+
+2. **压缩策略**：
+   ```
+   FP16存储：标准选择
+   INT8量化：
+   - Per-channel scale
+   - 动态范围调整
+   块稀疏：保留top-k注意力
+   ```
+
+#### 混合精度推理
+
+1. **精度分配**：
+   ```
+   计算精度：
+   - GEMM累加：FP32
+   - 激活函数：FP16
+   - Softmax：FP32（数值稳定性）
+   
+   存储精度：
+   - 权重：INT8/FP16
+   - 激活：FP16
+   - KV Cache：INT8/FP16
+   ```
+
+2. **自动混合精度**：
+   ```
+   基于层敏感度分析：
+   - Attention层：保持FP16
+   - FFN层：可降至INT8
+   - 最后几层：保持高精度
+   ```
+
+### 20.3.8 性能分析与调优
+
+#### 性能指标
+
+1. **GPU利用率**：
+   ```
+   计算利用率 = 实际FLOPS / 理论FLOPS
+   目标：> 70%
+   
+   内存利用率 = 实际带宽 / 理论带宽
+   目标：> 60%
+   ```
+
+2. **能效比**：
+   ```
+   tokens/焦耳 = 生成tokens数 / 能量消耗
+   优化目标：最大化能效比
+   ```
+
+#### 调优工具
+
+1. **Mali工具**：
+   - Streamline：性能分析
+   - Graphics Analyzer：着色器调试
+   - Offline Compiler：预编译优化
+
+2. **Adreno工具**：
+   - Snapdragon Profiler：全面分析
+   - Adreno GPU Inspector：深度调试
+   - PerfLock：性能锁定
+
+## 20.4 端侧NPU编程（NNAPI/CoreML）
+
+专用神经网络处理器（NPU）代表了边缘AI计算的未来方向。通过专门的硬件设计，NPU能够以极高的能效比执行深度学习工作负载。本节将深入探讨Android NNAPI和iOS Core ML/ANE的编程模型与优化策略。
+
+### 20.4.1 Android NNAPI架构
+
+#### NNAPI概述
+
+Android神经网络API（NNAPI）是Android 8.1引入的硬件加速框架，提供统一的接口访问各种AI加速器。
+
+1. **架构层次**：
+   ```
+   应用层（TensorFlow Lite等）
+           ↓
+   NNAPI C API
+           ↓
+   NNAPI Runtime
+           ↓
+   HAL（硬件抽象层）
+           ↓
+   驱动程序（厂商实现）
+           ↓
+   硬件加速器（DSP/GPU/NPU）
+   ```
+
+2. **支持的操作类型**：
+   - 卷积类：CONV_2D、DEPTHWISE_CONV_2D、GROUPED_CONV_2D
+   - 激活类：RELU、RELU6、TANH、LOGISTIC
+   - 池化类：MAX_POOL_2D、AVERAGE_POOL_2D
+   - 归一化：BATCH_NORM、LAYER_NORM
+   - 注意力：支持部分Transformer操作
+
+3. **设备能力查询**：
+   ```
+   设备特性：
+   - getCapabilities()：查询支持的操作
+   - getPerformanceInfo()：获取性能特征
+   - getSupportedOperations()：检查模型兼容性
+   ```
+
+#### NNAPI编程模型
+
+1. **模型构建流程**：
+   ```
+   1. 创建模型：ANeuralNetworksModel_create()
+   2. 添加操作数：ANeuralNetworksModel_addOperand()
+   3. 设置操作数值：ANeuralNetworksModel_setOperandValue()
+   4. 添加操作：ANeuralNetworksModel_addOperation()
+   5. 标识输入输出：ANeuralNetworksModel_identifyInputsAndOutputs()
+   6. 完成模型：ANeuralNetworksModel_finish()
+   ```
+
+2. **编译优化**：
+   ```
+   编译选项：
+   - 优先级：PREFER_LOW_POWER / PREFER_FAST_SINGLE_ANSWER / PREFER_SUSTAINED_SPEED
+   - 缓存：启用编译缓存加速启动
+   - 设备选择：指定特定加速器
+   ```
+
+3. **执行模式**：
+   ```
+   同步执行：
+   - ANeuralNetworksExecution_compute()
+   - 阻塞直到完成
+   
+   异步执行：
+   - ANeuralNetworksExecution_startCompute()
+   - 使用事件或回调
+   ```
+
+#### 内存管理策略
+
+1. **内存类型**：
+   ```
+   ANEURALNETWORKS_TENSOR_FLOAT32：32位浮点
+   ANEURALNETWORKS_TENSOR_INT32：32位整数
+   ANEURALNETWORKS_TENSOR_QUANT8_ASYMM：非对称量化INT8
+   ANEURALNETWORKS_TENSOR_QUANT8_SYMM：对称量化INT8
+   ```
+
+2. **共享内存优化**：
+   ```
+   使用AHardwareBuffer：
+   - 零拷贝在CPU/GPU/NPU间共享
+   - 减少内存占用
+   - 提高数据传输效率
+   ```
+
+3. **内存池管理**：
+   ```
+   创建内存池：
+   - 预分配大块内存
+   - 减少动态分配开销
+   - 支持多个执行共享
+   ```
+
+### 20.4.2 iOS CoreML与ANE
+
+#### CoreML框架架构
+
+CoreML是苹果的机器学习框架，与Apple Neural Engine（ANE）紧密集成：
+
+1. **框架组件**：
+   ```
+   Vision/Natural Language/Speech
+              ↓
+         Core ML API
+              ↓
+     Core ML Compiler
+              ↓
+   Metal Performance Shaders / ANE
+              ↓
+        硬件（CPU/GPU/ANE）
+   ```
+
+2. **模型格式**：
+   - .mlmodel：标准CoreML格式
+   - .mlpackage：支持更复杂模型
+   - 支持动态形状和灵活输入
+
+3. **ANE特性**：
+   ```
+   Apple Neural Engine（A14及以后）：
+   - 16个神经核心（A14/A15）
+   - 32个神经核心（M1 Pro/Max）
+   - 11 TOPS（A14）到15.8 TOPS（A15）
+   ```
+
+#### CoreML编程接口
+
+1. **模型加载与配置**：
+   ```
+   配置选项：
+   MLModelConfiguration：
+   - computeUnits：.all / .cpuOnly / .cpuAndGPU / .cpuAndNeuralEngine
+   - parameters：自定义参数
+   - modelDisplayName：模型标识
+   ```
+
+2. **批处理优化**：
+   ```
+   MLBatchProvider协议：
+   - 支持批量推理
+   - 自动优化批次执行
+   - 减少调度开销
+   ```
+
+3. **异步预测**：
+   ```
+   prediction(from:options:completionHandler:)
+   - 非阻塞执行
+   - 后台队列处理
+   - 适合实时应用
+   ```
+
+#### ANE优化技术
+
+1. **支持的层类型**：
+   ```
+   高效层：
+   - 卷积（1x1、3x3、5x5）
+   - 深度卷积
+   - 全连接
+   - 池化（最大、平均）
+   - 激活（ReLU、Sigmoid、Tanh）
+   
+   条件支持：
+   - 自注意力（需要特定模式）
+   - LSTM/GRU（展开后）
+   ```
+
+2. **精度与性能**：
+   ```
+   ANE精度模式：
+   - Float16：默认精度
+   - Float32：回退到GPU/CPU
+   - INT8：通过量化工具
+   
+   性能特征：
+   - 固定延迟：批大小不影响延迟
+   - 高吞吐量：充分利用并行性
+   ```
+
+3. **内存布局优化**：
+   ```
+   ANE偏好布局：
+   - NCHW格式
+   - 16字节对齐
+   - 连续内存块
+   ```
+
+### 20.4.3 NPU编程模型
+
+#### 通用NPU特性
+
+1. **计算模式**：
+   ```
+   数据流架构：
+   - 无指令获取开销
+   - 流水线并行
+   - 确定性延迟
+   
+   脉动阵列：
+   - 规则的数据流动
+   - 高度并行MAC单元
+   - 适合矩阵运算
+   ```
+
+2. **内存层次**：
+   ```
+   片上SRAM：~MB级别
+   - 权重缓存
+   - 激活缓存
+   - 中间结果
+   
+   DMA引擎：
+   - 预取权重
+   - 流式激活
+   - 双缓冲
+   ```
+
+3. **量化支持**：
+   ```
+   硬件量化：
+   - INT8/INT4计算
+   - 动态定点
+   - 非对称量化
+   
+   量化参数：
+   - Per-tensor
+   - Per-channel
+   - Per-layer自适应
+   ```
+
+#### NPU特定优化
+
+1. **算子融合**：
+   ```
+   常见融合模式：
+   Conv + BN + ReLU → 单个NPU指令
+   MatMul + Add + Activation → 融合操作
+   
+   好处：
+   - 减少内存访问
+   - 提高计算密度
+   - 降低功耗
+   ```
+
+2. **数据布局转换**：
+   ```
+   NPU友好布局：
+   输入：NHWC → NC/32HWC32（32通道分块）
+   权重：OIHW → O/32I/32HW32（双向分块）
+   
+   转换时机：
+   - 离线：模型转换时
+   - 在线：首次加载时
+   ```
+
+3. **流水线优化**：
+   ```
+   三级流水线：
+   1. DMA读取下一层权重
+   2. NPU计算当前层
+   3. DMA写回上一层结果
+   
+   关键：平衡各级时间
+   ```
+
+### 20.4.4 算子映射策略
+
+#### 映射决策
+
+1. **算子分类**：
+   ```
+   NPU原生支持：
+   - 标准卷积
+   - 矩阵乘法
+   - 基本激活
+   
+   部分支持：
+   - 需要分解的复杂算子
+   - 特殊padding模式
+   
+   回退CPU/GPU：
+   - 自定义算子
+   - 动态形状
+   - 条件执行
+   ```
+
+2. **分割策略**：
+   ```
+   子图划分原则：
+   - 最大化NPU利用率
+   - 最小化数据传输
+   - 避免频繁切换
+   
+   启发式规则：
+   - 连续NPU算子聚合
+   - 考虑内存占用
+   - 平衡延迟与吞吐
+   ```
+
+3. **动态调度**：
+   ```
+   运行时决策：
+   - 基于输入大小
+   - 基于系统负载
+   - 基于功耗预算
+   ```
+
+#### LLM特定映射
+
+1. **Attention机制**：
+   ```
+   分解策略：
+   Q、K、V投影 → NPU矩阵乘法
+   注意力分数 → NPU矩阵乘法
+   Softmax → CPU/GPU（数值精度）
+   值聚合 → NPU矩阵乘法
+   ```
+
+2. **FFN层**：
+   ```
+   优化映射：
+   - 第一个线性层：NPU执行
+   - 激活函数：根据类型决定
+   - 第二个线性层：NPU执行
+   - 残差连接：NPU支持
+   ```
+
+3. **KV Cache处理**：
+   ```
+   存储位置：
+   - 热cache：NPU SRAM
+   - 温cache：系统内存
+   - 冷cache：压缩存储
+   
+   更新策略：
+   - 增量更新
+   - 批量搬迁
+   ```
+
+### 20.4.5 混合精度推理
+
+#### 精度策略
+
+1. **层级精度分配**：
+   ```
+   敏感层（FP16/FP32）：
+   - 第一层和最后一层
+   - Attention计算
+   - 层归一化
+   
+   容忍层（INT8/INT4）：
+   - 中间FFN层
+   - 深层卷积
+   - 投影层
+   ```
+
+2. **动态量化**：
+   ```
+   校准过程：
+   1. 收集激活统计
+   2. 计算量化参数
+   3. 验证精度损失
+   4. 调整量化策略
+   ```
+
+3. **混合执行**：
+   ```
+   执行流程：
+   - INT8计算 → INT32累加
+   - FP16反量化
+   - FP32关键操作
+   - INT8重量化
+   ```
+
+#### 量化感知训练适配
+
+1. **QAT for NPU**：
+   ```
+   训练策略：
+   - 模拟NPU量化行为
+   - 插入伪量化节点
+   - 学习量化参数
+   
+   NPU特定约束：
+   - 支持的量化粒度
+   - 硬件舍入模式
+   - 饱和行为
+   ```
+
+2. **后训练优化**：
+   ```
+   PTQ流程：
+   1. 原始模型分析
+   2. 敏感度评估
+   3. 逐层量化
+   4. 精度恢复
+   ```
+
+### 20.4.6 跨平台兼容性
+
+#### 统一抽象层
+
+1. **中间表示**：
+   ```
+   通用IR设计：
+   - 算子定义标准化
+   - 数据类型统一
+   - 属性规范化
+   
+   平台映射：
+   - NNAPI：通过NDK
+   - CoreML：通过转换器
+   - 自定义NPU：厂商SDK
+   ```
+
+2. **性能可移植性**：
+   ```
+   自适应策略：
+   - 运行时能力检测
+   - 动态算子选择
+   - 性能模型预测
+   ```
+
+3. **回退机制**：
+   ```
+   多级回退：
+   NPU不支持 → GPU加速 → CPU执行
+   
+   保证：
+   - 功能完整性
+   - 精度一致性
+   - 性能可接受
+   ```
+
+#### 部署最佳实践
+
+1. **模型准备**：
+   ```
+   优化步骤：
+   1. 模型剪枝/压缩
+   2. 算子融合/重写
+   3. 量化/格式转换
+   4. 平台特定优化
+   ```
+
+2. **测试验证**：
+   ```
+   验证维度：
+   - 功能正确性
+   - 性能指标
+   - 功耗特性
+   - 内存占用
+   ```
+
+3. **持续优化**：
+   ```
+   监控指标：
+   - 推理延迟分布
+   - 能效比趋势
+   - 热点分析
+   - 用户体验反馈
+   ```
+
+### 20.4.7 NPU上的LLM优化
+
+#### 架构适配
+
+1. **模型分片**：
+   ```
+   垂直分片：
+   - 按层分割
+   - NPU处理计算密集层
+   - CPU处理控制逻辑
+   
+   水平分片：
+   - 按通道/头分割
+   - 并行处理
+   - 结果聚合
+   ```
+
+2. **内存优化**：
+   ```
+   策略组合：
+   - 权重压缩：4-bit量化
+   - KV缓存：8-bit存储
+   - 激活：混合精度
+   - 梯度：不需要（推理）
+   ```
+
+3. **调度优化**：
+   ```
+   批处理策略：
+   - 连续批处理
+   - 动态批大小
+   - 优先级调度
+   
+   延迟隐藏：
+   - 预取下一层
+   - 异步后处理
+   - 流水线并行
+   ```
+
+#### 能效优化
+
+1. **功耗感知调度**：
+   ```
+   动态策略：
+   - 低功耗模式：降频+小批量
+   - 均衡模式：适中配置
+   - 性能模式：满频+大批量
+   ```
+
+2. **热管理**：
+   ```
+   温控策略：
+   - 温度监控
+   - 动态降频
+   - 任务迁移
+   - 主动散热
+   ```
+
+3. **电池优化**：
+   ```
+   省电技术：
+   - 批量处理请求
+   - 空闲时深度睡眠
+   - 避免频繁唤醒
+   - 预测性关闭
+   ```
