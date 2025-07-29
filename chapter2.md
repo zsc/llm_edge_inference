@@ -35,40 +35,110 @@ $$I = \frac{\text{FLOPs}}{\text{Memory Traffic (Bytes)}}$$
 
 ### 2.1.3 硬件参数示例
 
-以几种典型的边缘设备为例：
+以几种典型的边缘设备为例，我们可以看到不同硬件架构的性能特征：
 
 **Qualcomm Snapdragon 8 Gen 3（移动处理器）**：
 - CPU峰值性能：~100 GFLOPS (FP32)
 - GPU峰值性能：~2 TFLOPS (FP16)
 - 内存带宽：~64 GB/s
 - 转折点计算强度：$I_{ridge} = \frac{2000}{64} \approx 31.25$ FLOP/Byte
+- 典型功耗：5-10W
+- 应用场景：智能手机、平板电脑
 
 **Apple M2（笔记本处理器）**：
 - CPU峰值性能：~400 GFLOPS (FP32)
 - GPU峰值性能：~3.6 TFLOPS (FP32)
 - 内存带宽：~100 GB/s
 - 转折点计算强度：$I_{ridge} = \frac{3600}{100} = 36$ FLOP/Byte
+- 典型功耗：15-30W
+- 统一内存架构优势：零拷贝访问
 
 **NVIDIA Jetson Orin NX（嵌入式AI平台）**：
 - GPU峰值性能：~5.3 TFLOPS (FP16)
 - 内存带宽：~102.4 GB/s
 - 转折点计算强度：$I_{ridge} = \frac{5300}{102.4} \approx 51.8$ FLOP/Byte
+- 典型功耗：10-25W
+- 特点：支持稀疏张量核心
+
+**MediaTek Dimensity 9300（移动处理器）**：
+- CPU峰值性能：~150 GFLOPS (FP32)
+- NPU峰值性能：~1.8 TOPS (INT8)
+- 内存带宽：~77 GB/s
+- 混合精度计算能力强
+- APU专门优化Transformer推理
+
+**Google Tensor G3（移动AI芯片）**：
+- TPU峰值性能：~4.5 TOPS (INT8)
+- 内存带宽：~68 GB/s
+- 专门的Edge TPU v3架构
+- 优化的矩阵乘法单元
+
+这些硬件的转折点计算强度差异反映了设计权衡：
+- 移动处理器（30-40 FLOP/Byte）：优化功耗，内存带宽相对受限
+- 嵌入式AI平台（50+ FLOP/Byte）：更高的计算密度，适合批处理
+- 专用AI加速器：通过架构创新提升有效计算强度
 
 ### 2.1.4 Roofline模型的实际应用
 
-在分析具体算法时，我们需要考虑：
+在分析具体算法时，我们需要考虑多个实际因素：
 
 1. **缓存效应**：实际内存流量可能远小于理论值
-2. **向量化程度**：SIMD指令的利用率
-3. **数据精度**：FP32/FP16/INT8对计算强度的影响
+   - L1/L2/L3缓存的层次结构
+   - 缓存命中率对性能的影响
+   - Blocking/Tiling优化技术
 
-例如，对于批量大小为1的GEMM操作，若矩阵维度为 $[1, 4096] \times [4096, 4096]$：
+2. **向量化程度**：SIMD指令的利用率
+   - ARM NEON：128位向量，4个FP32或8个FP16
+   - AVX2/AVX-512：256/512位向量
+   - 向量化效率通常60-90%
+
+3. **数据精度**：FP32/FP16/INT8对计算强度的影响
+   - FP16：计算强度翻倍，但可能需要混合精度
+   - INT8：4倍提升，但需要量化开销
+   - BF16：保持FP32的动态范围，简化混合精度
+
+让我们通过几个实际例子来理解Roofline模型的应用：
+
+**例1：批量大小为1的GEMM操作** $[1, 4096] \times [4096, 4096]$：
 
 - 理论计算量：$2 \times 1 \times 4096 \times 4096 = 33.6$ MFLOPs
 - 理论内存访问：$(1 \times 4096 + 4096 \times 4096 + 1 \times 4096) \times 4 = 67.1$ MB
 - 计算强度：$I = \frac{33.6 \times 10^6}{67.1 \times 10^6} = 0.5$ FLOP/Byte
 
 这个极低的计算强度意味着该操作严重受限于内存带宽。
+
+**例2：考虑缓存的实际分析**：
+
+假设L2缓存为8MB，可以容纳2M个FP32元素。对于上述GEMM：
+- 第一个矩阵（4K元素）完全装入L1缓存
+- 第二个矩阵分块处理，每块512×512
+- 实际内存流量减少约4倍
+- 有效计算强度：$I_{eff} \approx 2.0$ FLOP/Byte
+
+**例3：批处理效应分析**：
+
+当批大小从1增加到16时：
+- 计算量增加16倍：$537.6$ MFLOPs
+- 权重矩阵复用，内存访问仅增加约1.06倍
+- 有效计算强度：$I_{batch=16} \approx 7.5$ FLOP/Byte
+- 在Snapdragon 8 Gen 3上，从Memory-bound向Compute-bound转变
+
+**实际优化策略层次**：
+
+1. **算法级优化**：
+   - Flash Attention：减少中间结果存储
+   - Fused Kernels：合并多个操作
+   - 重计算vs存储权衡
+
+2. **实现级优化**：
+   - 内存访问模式优化（连续访问）
+   - 数据布局转换（NHWC vs NCHW）
+   - 预取和流水线
+
+3. **硬件级优化**：
+   - 利用专用指令（如Tensor Core）
+   - 异步执行和重叠
+   - 动态频率调整
 
 ## 2.2 LLM推理的计算特性分析
 
@@ -107,44 +177,165 @@ $$I = \frac{\text{FLOPs}}{\text{Memory Traffic (Bytes)}}$$
 
 ### 2.2.3 FFN层的计算特性
 
-FFN通常采用两层结构：
+前馈网络（FFN）是Transformer的另一个计算密集组件，通常采用两层全连接结构：
 
-$$\text{FFN}(x) = \text{GELU}(xW_1 + b_1)W_2 + b_2$$
+$$\text{FFN}(x) = \text{Act}(xW_1 + b_1)W_2 + b_2$$
 
-其中 $W_1 \in \mathbb{R}^{d \times 4d}$，$W_2 \in \mathbb{R}^{4d \times d}$
+其中 $W_1 \in \mathbb{R}^{d \times d_{ff}}$，$W_2 \in \mathbb{R}^{d_{ff} \times d}$，通常$d_{ff} = 4d$
 
-计算量分析：
-- 第一层：$2L \times d \times 4d = 8Ld^2$ FLOPs
-- 激活函数：$\sim 10 \times L \times 4d$ FLOPs（GELU近似）
-- 第二层：$2L \times 4d \times d = 8Ld^2$ FLOPs
+#### 激活函数的选择与计算开销
 
-总计算量：$\approx 16Ld^2$ FLOPs
+不同模型采用不同的激活函数，各有计算特点：
+
+1. **GELU (Gaussian Error Linear Unit)**：
+   - 精确计算：$\text{GELU}(x) = x \cdot \Phi(x)$，其中$\Phi$是高斯累积分布函数
+   - 近似计算：$0.5x(1 + \tanh[\sqrt{2/\pi}(x + 0.044715x^3)])$
+   - 计算开销：~10 FLOPs/element
+   - 使用模型：BERT, GPT系列早期版本
+
+2. **SwiGLU (Swish-Gated Linear Unit)**：
+   - 定义：$\text{SwiGLU}(x, W, V) = \text{Swish}(xW) \otimes xV$
+   - 需要额外的门控参数，总参数量增加50%
+   - 计算开销：~15 FLOPs/element
+   - 使用模型：LLaMA, PaLM
+
+3. **GeGLU (GELU-Gated Linear Unit)**：
+   - 类似SwiGLU但使用GELU作为激活
+   - 计算特性介于GELU和SwiGLU之间
+   - 使用模型：GLM系列
+
+#### 详细计算量分析
+
+标准FFN（使用GELU）：
+- 第一层线性变换：$2L \times d \times 4d = 8Ld^2$ FLOPs
+- GELU激活：$\sim 10 \times L \times 4d = 40Ld$ FLOPs
+- 第二层线性变换：$2L \times 4d \times d = 8Ld^2$ FLOPs
+- 总计算量：$16Ld^2 + 40Ld \approx 16Ld^2$ FLOPs（当$d \gg 1$）
+
+门控FFN（如SwiGLU）：
+- 输入到门和值的投影：$2 \times 2L \times d \times 4d = 16Ld^2$ FLOPs
+- 激活和门控：$\sim 15 \times L \times 4d = 60Ld$ FLOPs
+- 输出投影：$2L \times 4d \times d = 8Ld^2$ FLOPs
+- 总计算量：$24Ld^2 + 60Ld$ FLOPs
+
+#### 内存访问模式分析
+
+FFN层的内存访问包括：
+
+1. **参数访问**：
+   - 标准FFN：$(d \times 4d + 4d \times d) = 8d^2$ 参数
+   - 门控FFN：$(d \times 8d + 4d \times d) = 12d^2$ 参数
+   - FP16存储：分别需要$16d^2$和$24d^2$字节
+
+2. **中间激活存储**：
+   - 第一层输出：$L \times 4d$ 元素
+   - 需要临时存储用于反向传播（训练）或可以流式处理（推理）
+
+3. **计算强度对比**：
+   - 预填充阶段（$L=2048$）：$I_{FFN} = \frac{16Ld^2}{(8d^2 + Ld) \times 2} \approx \frac{16L}{16 + L/d} \approx 15.9$ FLOP/Byte
+   - 生成阶段（$L=1$）：$I_{FFN} = \frac{16d^2}{(8d^2 + d) \times 2} \approx 1$ FLOP/Byte
+
+#### FFN优化技术
+
+1. **稀疏激活**：
+   - 利用ReLU族激活函数的稀疏性
+   - 跳过零值计算，可节省30-50%计算量
+   - 需要专门的稀疏计算内核
+
+2. **低秩分解**：
+   - 将$W_1$分解为$U_1V_1$，其中$U_1 \in \mathbb{R}^{d \times r}$，$V_1 \in \mathbb{R}^{r \times 4d}$
+   - 当$r < d$时可减少计算量和参数量
+   - 典型压缩率：2-4倍
+
+3. **混合专家（MoE）变体**：
+   - 将单个FFN替换为多个较小的专家网络
+   - 每个token仅激活部分专家
+   - 计算量可减少4-8倍，但增加了路由开销
 
 ### 2.2.4 推理阶段的特殊考虑
 
-LLM推理分为两个阶段：
+LLM推理的两个阶段展现出截然不同的计算特性：
 
-1. **预填充阶段（Prefill）**：
-   - 并行处理所有输入token
-   - 计算密集，易于向量化
-   - 计算强度相对较高
+#### 预填充阶段（Prefill Phase）
 
-2. **生成阶段（Generation）**：
-   - 逐个生成token
-   - 严重依赖KV Cache
-   - 计算强度极低
+预填充阶段处理所有输入token，具有以下特征：
 
-生成阶段的计算强度分析（单token生成）：
-- Attention计算：$\sim 4d^2 + 4Ld$ FLOPs
-- FFN计算：$\sim 16d^2$ FLOPs
-- 内存访问：整个模型参数 + KV Cache
+1. **并行计算特性**：
+   - 所有输入token同时处理
+   - 矩阵维度大，适合GPU并行
+   - 可充分利用向量化指令
 
-对于7B参数模型（$d=4096$），生成单个token：
-- 计算量：$\sim 20 \times 4096^2 \approx 335$ MFLOPs
-- 参数访问：$\sim 7 \times 10^9 \times 2 = 14$ GB（FP16）
-- 计算强度：$I \approx \frac{335 \times 10^6}{14 \times 10^9} \approx 0.024$ FLOP/Byte
+2. **计算模式分析**：
+   - 批量矩阵乘法：$[B, L, d] \times [d, d]$
+   - 注意力计算：$O(L^2d)$复杂度
+   - 易于达到硬件峰值性能的70-80%
 
-这解释了为什么LLM推理在边缘设备上极其具有挑战性。
+3. **计算强度估算**：
+   对于序列长度$L=2048$，$d=4096$的场景：
+   - Attention层：$I_{att} \approx \frac{8Ld^2 + 4L^2d}{3Ld \times 4} \approx 2.7d + \frac{L}{3} \approx 11,700$ FLOP/Byte
+   - FFN层：$I_{ffn} \approx \frac{16Ld^2}{Ld \times 4} = 4d = 16,384$ FLOP/Byte
+   - 整体计算强度：~10,000+ FLOP/Byte（理论值）
+
+4. **实际性能考虑**：
+   - 缓存效应降低实际内存流量
+   - 内核融合减少中间结果存储
+   - 典型达到硬件峰值的40-60%
+
+#### 生成阶段（Generation Phase）
+
+生成阶段逐token自回归，面临独特挑战：
+
+1. **增量计算模式**：
+   - 每步仅处理单个新token
+   - 大量计算用于访问历史KV Cache
+   - 内存访问模式不规则
+
+2. **KV Cache依赖分析**：
+   ```
+   对于第t个生成token：
+   - Query计算：[1, d] × [d, d] = 2d² FLOPs
+   - KV Cache读取：2 × (L+t) × d × layers × sizeof(dtype)
+   - Attention计算：2 × (L+t) × d FLOPs
+   - 计算/访问比：约0.5 FLOP/Byte
+   ```
+
+3. **详细计算强度分析**：
+   
+   对于7B参数模型（32层，$d=4096$，$h=32$）生成第100个token（已有2048个上下文）：
+   
+   **Attention部分**：
+   - QKV投影：$3 \times 2d^2 = 201$ MFLOPs
+   - 与KV Cache的注意力计算：$2 \times 2148 \times 4096 = 17.6$ MFLOPs
+   - 输出投影：$2d^2 = 67$ MFLOPs
+   - KV Cache读取：$2 \times 2148 \times 4096 \times 2 = 35.2$ MB
+   - 参数读取：$4d^2 \times 2 = 134$ MB
+   - Attention计算强度：$\frac{286}{169.2} = 1.69$ FLOP/Byte
+
+   **FFN部分**：
+   - 计算：$16d^2 = 536$ MFLOPs
+   - 参数读取：$8d^2 \times 2 = 268$ MB
+   - FFN计算强度：$\frac{536}{268} = 2.0$ FLOP/Byte
+
+   **整体分析**：
+   - 总计算：$(286 + 536) \times 32 = 26.3$ GFLOPs
+   - 总内存访问：$(169.2 + 268) \times 32 = 14$ GB
+   - 整体计算强度：$I = \frac{26.3 \times 10^9}{14 \times 10^9} = 1.88$ FLOP/Byte
+
+4. **性能瓶颈深入分析**：
+   
+   在典型边缘设备（如Apple M2）上：
+   - 理论内存带宽：100 GB/s
+   - 实际可用带宽：~70 GB/s（考虑系统开销）
+   - 单token理论延迟：$\frac{14}{70} = 200$ ms
+   - 实际延迟：250-300 ms（考虑其他开销）
+
+5. **优化机会识别**：
+   - **计算融合**：将多个操作合并，减少内存往返
+   - **KV Cache压缩**：量化或稀疏化存储
+   - **投机执行**：并行尝试多个可能的token
+   - **动态批处理**：将多个请求的生成阶段合并
+
+这种极低的计算强度（<2 FLOP/Byte）远低于边缘设备的转折点（30-50 FLOP/Byte），解释了为什么LLM推理在边缘设备上极其具有挑战性。生成阶段几乎完全受限于内存带宽，这也是为什么量化、稀疏化等减少内存访问的技术如此重要。
 
 ## 2.3 关键判则：Attention层计算量占比分析
 
@@ -162,50 +353,211 @@ $$\text{Ratio} = \frac{\text{FLOPs}_{\text{Attention}}}{\text{FLOPs}_{\text{FFN}
 
 ### 2.3.2 实际模型的计算分布
 
-以几个代表性模型为例：
+通过分析不同规模和架构的模型，我们可以更深入理解计算分布的变化规律：
 
-**Llama-2 7B**（$d=4096$，32层）：
+#### 主流模型架构对比
+
+**Llama-2 7B**（$d=4096$，$h=32$，32层）：
 - 预填充阶段（$L=2048$）：
-  - Attention：$\sim 1.1$ TFLOPs
-  - FFN：$\sim 2.2$ TFLOPs
-  - 占比：33.3%
+  - Attention：$(8 \times 2048 \times 4096^2 + 4 \times 2048^2 \times 4096) \times 32 = 1.10$ TFLOPs
+  - FFN：$16 \times 2048 \times 4096^2 \times 32 = 2.20$ TFLOPs
+  - LayerNorm等：$\sim 0.01$ TFLOPs
+  - Attention占比：$\frac{1.10}{1.10 + 2.20} = 33.3\%$
   
 - 生成阶段（单token，$L=2048$已缓存）：
-  - Attention：$\sim 17$ GFLOPs
-  - FFN：$\sim 34$ GFLOPs
-  - 占比：33.3%
+  - Attention：$\sim 17.2$ GFLOPs/token
+  - FFN：$\sim 34.4$ GFLOPs/token
+  - 占比保持33.3%（符合理论预测）
 
-**Phi-3 mini**（$d=3072$，32层）：
-- 更小的模型维度使得长序列时Attention占比增加
-- 在$L=4096$时，Attention占比可达45%
+**Phi-3 mini 3.8B**（$d=3072$，$h=32$，32层）：
+- 架构特点：更小的隐藏维度，支持更长上下文
+- 在$L=4096$时：
+  - Attention占比：$\frac{1}{2} + \frac{4096}{4 \times 3072} = 0.5 + 0.33 = 83.3\%$（理论值）
+  - 实际测量：约45%（由于优化和近似）
+- 长上下文使Attention优化更加重要
+
+**Mistral 7B**（$d=4096$，$h=32$，32层，GQA with 8 groups）：
+- 使用Grouped Query Attention减少KV计算
+- 预填充阶段：
+  - Attention（含GQA优化）：$\sim 0.85$ TFLOPs
+  - FFN（SwiGLU）：$\sim 3.3$ TFLOPs
+  - Attention占比：20.5%（GQA显著降低）
+- GQA将KV projection计算量减少4倍
+
+**Qwen2 7B**（$d=3584$，$h=28$，28层）：
+- 使用非标准维度优化硬件利用率
+- RMSNorm替代LayerNorm，减少规范化开销
+- 计算分布：
+  - Attention：31%
+  - FFN：68%
+  - 其他：1%
+
+**Gemma 7B**（$d=3072$，$h=16$，28层）：
+- 更少的注意力头，更大的头维度（$d_k=192$）
+- GeGLU激活函数
+- 长序列（$L=8192$）时Attention占比可达55%
+
+#### 架构创新对计算分布的影响
+
+1. **Multi-Query Attention (MQA)**：
+   - 将所有头共享同一组KV
+   - KV projection计算减少$h$倍
+   - Attention总体占比从33%降至15-20%
+   - 代表模型：PaLM, Falcon
+
+2. **Grouped-Query Attention (GQA)**：
+   - 介于MHA和MQA之间的折中
+   - 典型使用8组，每组4个头
+   - Attention占比降至20-25%
+   - 代表模型：Llama-3, Mistral
+
+3. **门控线性单元（GLU）变体**：
+   - SwiGLU/GeGLU增加FFN计算50%
+   - 相对降低Attention占比
+   - 但整体性能更好
+
+4. **Flash Attention优化后**：
+   - 不改变理论计算量
+   - 但通过减少内存访问提升实际性能
+   - 使长序列Attention计算更可行
+
+#### 动态计算分布分析
+
+在实际推理过程中，计算分布随上下文长度动态变化：
+
+```
+时间步 t=0 (预填充，L=2048)：
+- Attention: 33.3%
+- FFN: 66.7%
+
+时间步 t=100 (已生成100 tokens)：
+- 有效序列长度：2148
+- Attention占比：34.1%
+
+时间步 t=1000：
+- 有效序列长度：3048
+- Attention占比：37.2%
+- KV Cache增长导致内存压力上升
+```
+
+这种动态变化意味着：
+- 初期优化重点在FFN
+- 随着生成进行，Attention优化变得更重要
+- 需要自适应的优化策略
 
 ### 2.3.3 优化策略的选择依据
 
-基于Attention占比分析，我们可以制定优化策略：
+基于Attention占比分析，我们可以制定分层优化策略：
 
-1. **低占比场景**（< 35%）：
-   - 重点优化FFN层（如2:4稀疏）
-   - 考虑FFN量化的优先级更高
+#### 场景化优化方案
 
-2. **中等占比场景**（35%-50%）：
-   - 平衡优化两部分
-   - Flash Attention等技术效果明显
+1. **低占比场景**（< 35%）- FFN主导型：
+   
+   **典型场景**：短序列生成、批处理推理
+   
+   **优化策略**：
+   - **2:4结构化稀疏**：利用NVIDIA Ampere架构的稀疏张量核心
+   - **FFN层量化**：W8A8或W4A16量化，优先压缩FFN权重
+   - **激活函数优化**：使用ReLU替代GELU减少计算
+   - **层融合**：将FFN的两层操作融合为一个kernel
+   
+   **实际案例**：在Llama-2 7B短序列推理中，2:4稀疏可实现1.5倍加速
 
-3. **高占比场景**（> 50%）：
-   - 优先考虑Attention优化
-   - MQA/GQA架构改进
-   - KV Cache压缩
+2. **中等占比场景**（35%-50%）- 平衡型：
+   
+   **典型场景**：中等长度文档处理、对话系统
+   
+   **优化策略**：
+   - **Flash Attention**：IO优化，减少HBM访问
+   - **混合精度计算**：Attention用FP16，FFN用INT8
+   - **动态稀疏**：根据注意力分数动态跳过计算
+   - **算子级并行**：Attention和FFN并行执行
+   
+   **性能提升**：Flash Attention在2K-8K序列上可达2-4倍加速
+
+3. **高占比场景**（> 50%）- Attention主导型：
+   
+   **典型场景**：长文档理解、代码生成、多轮对话
+   
+   **优化策略**：
+   - **架构级改进**：
+     - MQA：减少KV heads至1，内存减少32倍
+     - GQA：平衡性能和内存，典型减少4-8倍
+   - **KV Cache优化**：
+     - 量化存储：FP16→INT8，甚至INT4
+     - 稀疏存储：仅保留重要的KV对
+     - 分层缓存：热数据在HBM，冷数据在DDR
+   - **注意力模式优化**：
+     - 滑动窗口注意力
+     - 稀疏注意力模式（如BigBird）
+     - 层次化注意力
+
+#### 硬件感知的优化选择
+
+不同硬件平台需要不同的优化策略：
+
+**移动GPU（如Adreno, Mali）**：
+- 内存带宽受限（30-60 GB/s）
+- 优先考虑量化和稀疏化
+- 适合MQA/GQA架构
+
+**边缘AI加速器（如Edge TPU）**：
+- 高计算密度，低内存带宽
+- 重点优化数据重用
+- 批处理提升计算强度
+
+**桌面级GPU（如RTX 4060）**：
+- 相对充足的内存带宽（200+ GB/s）
+- 可以承受更大的模型
+- Flash Attention效果显著
 
 ### 2.3.4 动态计算量分析
 
-在实际推理中，计算量分布是动态变化的：
+在实际推理中，计算量分布是动态变化的，需要自适应优化：
+
+#### 计算量增长模型
 
 $$\text{FLOPs}_{\text{total}}(t) = \text{FLOPs}_{\text{prefill}} + \sum_{i=1}^{t} \text{FLOPs}_{\text{gen}}(L_{\text{context}} + i)$$
 
-其中$t$是生成的token数。随着生成过程推进：
-- KV Cache不断增长
-- Attention计算量线性增加
-- 内存带宽压力持续上升
+展开后：
+$$\text{FLOPs}_{\text{total}}(t) = C_1L^2 + C_2L + \sum_{i=1}^{t}[C_3(L+i) + C_4]$$
+
+其中：
+- $C_1 = 4d \times \text{layers}$（Attention二次项）
+- $C_2 = 24d^2 \times \text{layers}$（线性项）
+- $C_3 = 4d \times \text{layers}$（生成阶段Attention）
+- $C_4 = 20d^2 \times \text{layers}$（生成阶段其他）
+
+#### 内存压力分析
+
+KV Cache增长导致的内存压力：
+
+$$\text{Memory}_{\text{KV}}(t) = 2 \times \text{layers} \times (L + t) \times d \times \text{sizeof(dtype)}$$
+
+对于7B模型生成1000 tokens：
+- 初始KV Cache（L=2048）：1.05 GB
+- 最终KV Cache（L+t=3048）：1.56 GB
+- 增长率：48.6%
+
+#### 自适应优化策略
+
+基于动态分析，可实施以下自适应策略：
+
+1. **阶段切换**：
+   - t < 100：标准精度，优化FFN
+   - 100 < t < 500：KV Cache量化至INT8
+   - t > 500：激活稀疏注意力模式
+
+2. **动态批处理**：
+   - 短序列请求聚合以提高计算强度
+   - 长序列请求独立处理避免内存溢出
+
+3. **计算图重构**：
+   - 检测Attention占比超过阈值
+   - 动态切换到MQA-style计算模式
+   - 运行时kernel选择
+
+这种动态优化能够在不同生成阶段维持最优性能。
 
 ## 2.4 Memory-bound到Compute-bound的转换条件
 
@@ -249,27 +601,148 @@ $$I \approx \frac{2MNK}{(MK + KN + MN) \times \text{sizeof(dtype)}}$$
 
 ### 2.4.4 实际优化策略
 
-基于Memory-bound/Compute-bound分析，我们可以采取以下策略：
+基于Memory-bound/Compute-bound分析，我们可以采取分层优化策略：
 
-1. **提高计算强度**：
-   - 增加批处理大小
-   - 算子融合减少中间结果存储
-   - 使用更低精度的数据类型
+#### 1. 提高计算强度的技术路径
 
-2. **减少内存访问**：
-   - KV Cache复用
-   - 权重共享技术
-   - 分块计算（tiling）
+**批处理优化**：
+- **动态批处理（Dynamic Batching）**：
+  - vLLM的连续批处理：新请求可随时加入
+  - 不同序列长度的padding优化
+  - 批大小与延迟的权衡：$B_{opt} = \sqrt{\frac{BW_{mem} \times \text{Latency}_{target}}{2 \times \text{Model Size}}}$
 
-3. **硬件感知优化**：
-   - 根据$I_{\text{ridge}}$选择合适的批大小
-   - 动态调整计算精度
-   - 利用片上存储（如GPU shared memory）
+- **请求级并行**：
+  - 将多个用户请求的预填充阶段合并
+  - 生成阶段的投机批处理
+  - 示例：批大小从1增至8，计算强度提升6-7倍
 
-对于边缘设备，典型的$I_{\text{ridge}}$在30-50 FLOP/Byte范围内，这意味着：
-- 单token生成几乎总是Memory-bound
-- 预填充阶段在$L > 512$时可能达到Compute-bound
-- 批处理是提升硬件利用率的关键
+**算子融合技术**：
+- **Kernel Fusion示例**：
+  ```
+  传统：LayerNorm → QKV Projection → Reshape → Transpose
+  融合：SingleFusedKernel（减少4次内存往返）
+  计算强度提升：2-3倍
+  ```
+
+- **Flash Attention的IO优化**：
+  - 将注意力计算分块在SRAM中完成
+  - 避免存储$L \times L$的注意力矩阵
+  - 内存访问从$O(L^2)$降至$O(L)$
+
+**混合精度策略**：
+- **W4A16**：权重INT4，激活FP16
+  - 计算强度提升4倍
+  - 适合Memory-bound的生成阶段
+  
+- **W8A8**：权重和激活都是INT8
+  - 需要硬件INT8支持
+  - 计算强度和吞吐量都提升2倍
+
+#### 2. 减少内存访问的创新方法
+
+**KV Cache优化技术栈**：
+
+1. **Multi-Level KV Cache**：
+   ```
+   L1: On-chip SRAM (1-2 MB) - 最近256 tokens
+   L2: HBM/DRAM (4-8 GB) - 完整上下文
+   L3: SSD/Flash (100+ GB) - 历史会话
+   ```
+
+2. **压缩技术对比**：
+   - **量化**：FP16→INT8 (2x)，INT8→INT4 (4x)
+   - **稀疏化**：保留top-k重要token，压缩率3-5x
+   - **低秩分解**：将KV投影到低维空间，压缩率2-4x
+
+3. **H2O (Heavy Hitter Oracle)**：
+   - 动态识别重要token
+   - 仅保留20%的KV对
+   - 性能损失< 1%
+
+**权重共享与复用**：
+- **层间共享**：相邻层共享部分权重
+- **循环层**：Universal Transformer思想
+- **参数高效微调**：LoRA避免存储完整模型
+
+**分块计算优化**：
+```
+矩阵分块大小选择：
+Block_size = min(
+    sqrt(Cache_size / (3 × sizeof(dtype))),
+    Hardware_vector_width × 4
+)
+
+典型值：
+- Mobile GPU: 64×64 到 128×128
+- Edge NPU: 256×256 到 512×512
+```
+
+#### 3. 硬件感知的自适应优化
+
+**运行时决策系统**：
+
+1. **Profile阶段**（前10 tokens）：
+   - 测量实际内存带宽
+   - 评估计算单元利用率
+   - 确定当前瓶颈
+
+2. **自适应调整**：
+   ```python
+   if measured_intensity < 0.5 * I_ridge:
+       # 严重Memory-bound
+       - 启用激进量化(INT4)
+       - 增加批大小
+       - 启用算子融合
+   elif measured_intensity < I_ridge:
+       # 轻度Memory-bound  
+       - 标准量化(INT8)
+       - 适度批处理
+       - 选择性融合
+   else:
+       # Compute-bound
+       - 保持高精度
+       - 优化计算并行度
+       - 考虑模型并行
+   ```
+
+3. **硬件特定优化**：
+   
+   **Qualcomm Hexagon DSP**：
+   - HVX向量处理：善于处理INT8/INT16
+   - 优先使用向量化友好的数据布局
+   - 计算强度阈值：~25 FLOP/Byte
+   
+   **Apple Neural Engine**：
+   - 专门的矩阵乘法单元
+   - 支持混合精度计算
+   - 计算强度阈值：~40 FLOP/Byte
+   
+   **ARM Mali GPU**：
+   - Bifrost架构：善于FP16计算
+   - 需要考虑warp divergence
+   - 计算强度阈值：~30 FLOP/Byte
+
+#### 实际部署案例分析
+
+**案例1：Phi-3在手机上的部署**
+- 硬件：Snapdragon 8 Gen 3
+- 优化前：300ms/token (Memory-bound)
+- 优化措施：
+  - INT4量化：内存访问减少4倍
+  - Flash Attention：减少中间存储
+  - 批大小4：提高复用
+- 优化后：75ms/token（接近Compute-bound）
+
+**案例2：Llama-2 7B在Jetson上的部署**
+- 硬件：Jetson Orin NX
+- 场景：实时对话系统
+- 优化策略：
+  - GQA架构：KV Cache减少4倍
+  - 动态量化：预填充FP16，生成INT8
+  - Tensor Core加速：利用INT8 HMMA指令
+- 结果：支持4路并发，延迟< 100ms
+
+这些优化策略的核心是理解并打破Memory-bound限制，将计算推向硬件的Compute限制，从而充分发挥边缘设备的潜力。
 
 ## 本章小结
 
