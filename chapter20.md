@@ -203,46 +203,430 @@ P = C × V² × f
 
 #### 矩阵乘法指令（SMMLA）
 
-Armv9引入了专门的矩阵乘法指令：
+Armv9引入了专门的矩阵乘法指令，这些指令能够在单个周期内完成多个乘累加操作：
+
 ```
-SMMLA：8位整数矩阵乘法
-UMMLA：8位无符号矩阵乘法
-USMMLA：混合有符号/无符号
+SMMLA：8位有符号整数矩阵乘法
+UMMLA：8位无符号整数矩阵乘法  
+USMMLA：混合有符号/无符号矩阵乘法
+BFMMLA：BFloat16矩阵乘法（Armv8.6+）
 ```
 
-性能提升：
-- 相比NEON：2-4倍提升
-- 特别适合INT8量化模型
+**SMMLA指令工作原理**：
+```
+输入：
+- Vn.16B：2×8 INT8矩阵A
+- Vm.16B：8×2 INT8矩阵B
+- Vd.4S：2×2 INT32累加器C
+
+操作：
+C[i,j] += Σ(k=0 to 7) A[i,k] × B[k,j]
+
+单条指令完成32个INT8乘法和28个INT32加法
+```
+
+**性能分析**：
+```
+传统NEON实现2×2矩阵乘法：
+- SMULL指令：8个周期（4条指令×2周期延迟）
+- SMLAL指令：8个周期（4条指令×2周期延迟）
+- 总计：16个周期
+
+SMMLA实现：
+- 单条SMMLA：1个周期
+- 性能提升：16倍理论提升，实际2-4倍（考虑内存瓶颈）
+```
+
+**优化GEMM内核示例**：
+```
+对于M×K×N的INT8矩阵乘法：
+1. 寄存器分块：8×8块（使用32个向量寄存器）
+2. 计算核心：
+   - 8个SMMLA指令处理8×8块
+   - 每个核心每周期：256个INT8 MAC操作
+3. 内存访问模式：
+   - A矩阵：行主序，预取下8行
+   - B矩阵：列主序，转置后访问
+   - C矩阵：块累加，最后写回
+```
+
+#### 可扩展矩阵扩展（SME）
+
+Armv9.2引入的SME是革命性的矩阵计算扩展：
+
+**架构特点**：
+```
+ZA寄存器：二维矩阵存储
+- 大小：SVL×SVL位（SVL=128到2048）
+- 对于512位SVL：可存储64×64 INT8矩阵
+- 支持分片访问和流式处理
+```
+
+**关键指令**：
+```
+LD1W：流式加载到ZA切片
+ST1W：从ZA切片流式存储
+FMOPA：外积累加（FP32/FP16）
+SMOPA：整数外积累加（INT8/INT16）
+```
+
+**性能潜力**：
+```
+理论峰值（SVL=512）：
+- INT8：512×512×频率 OPS
+- FP16：256×256×频率 FLOPS
+- FP32：128×128×频率 FLOPS
+
+相比传统SIMD：
+- 数据重用率提升64倍
+- 内存带宽需求降低8倍
+```
 
 #### 内存标记扩展（MTE）
 
-虽然主要用于安全，但MTE也影响性能：
-- 每16字节分配4位标记
-- 内存带宽开销：~3%
-- 可用于调试内存访问模式
+虽然MTE主要用于内存安全，但对性能优化也有重要影响：
+
+**MTE工作原理**：
+```
+内存标记：
+- 每16字节物理内存关联4位标记
+- 指针高位存储4位标记
+- 访问时硬件自动检查标记匹配
+```
+
+**性能影响分析**：
+```
+开销来源：
+1. 标记存储：6.25%额外内存（1/16）
+2. 标记检查：每次加载/存储+1周期
+3. 缓存影响：标记占用部分缓存空间
+
+优化策略：
+1. 大块内存分配：减少标记数量
+2. 对齐访问：利用标记缓存
+3. 批量操作：摊薄检查开销
+```
+
+**MTE辅助性能调试**：
+```
+使用场景：
+1. 检测内存访问模式：
+   - 为不同数据结构分配不同标记
+   - 统计跨标记访问识别伪共享
+
+2. 识别内存泄漏：
+   - 释放后立即更改标记
+   - 使用后访问立即触发异常
+
+3. 缓存行为分析：
+   - 不同缓存层使用不同标记
+   - 追踪数据在层次间的移动
+```
 
 ### 20.1.7 针对LLM的ARM优化最佳实践
 
-1. **Prefill阶段优化**：
-   - 使用SVE2进行批量矩阵运算
-   - 大核全速运行
-   - 预取下一层权重
+#### Prefill阶段优化策略
 
-2. **Decode阶段优化**：
-   - KV cache使用NEON优化
-   - 考虑功耗，可降频运行
-   - 利用小核处理简单token
+Prefill阶段的计算特征是批量矩阵运算，计算密度高，是优化的重点：
 
-3. **量化推理优化**：
-   - INT8：充分利用SMMLA指令
-   - FP16：使用FMLA指令
-   - 混合精度：关键层保持高精度
+**1. 计算优化**：
 
-4. **内存布局优化**：
-   ```
-   权重布局：NCHW → NC4HW4（适合NEON）
-   激活布局：考虑cache line对齐
-   ```
+```
+Attention计算分解（序列长度S，隐藏维度D）：
+Q = XWq: [S, D] × [D, D] → [S, D]
+K = XWk: [S, D] × [D, D] → [S, D]  
+V = XWv: [S, D] × [D, D] → [S, D]
+
+计算量：3 × S × D² FLOPs
+内存访问：3 × D² + 3 × S × D（权重+激活）
+算术强度：≈ S（当S >> 1时）
+```
+
+**SVE2优化策略**：
+```
+1. 向量长度自适应分块：
+   VL = svcntw() // 获取向量长度（words）
+   块大小 = min(VL, D/头数)
+
+2. 外积累加模式：
+   for i in range(0, S, VL):
+     for j in range(0, D, VL):
+       // 使用SVE外积指令
+       累加器 += outer_product(Q[i:i+VL], K[j:j+VL])
+
+3. 预取策略：
+   - L1预取距离：当前块+1
+   - L2预取距离：当前块+4
+   - 使用PRFM指令显式预取
+```
+
+**2. 调度优化**：
+
+```
+大核配置（Cortex-X3为例）：
+- 频率：最高3.0GHz
+- 功耗：~5W峰值
+- 持续时间：<100ms（热限制）
+
+调度策略：
+1. 将所有Prefill计算调度到大核
+2. 设置性能调控器到最高档
+3. 监控温度，必要时降频
+```
+
+**3. 内存带宽优化**：
+
+```
+带宽需求分析（D=4096, S=2048）：
+- 权重读取：3 × 4096² × 2 = 96MB（FP16）
+- 激活读写：2048 × 4096 × 2 × 2 = 32MB
+- 总带宽需求：128MB / 计算时间
+
+优化措施：
+1. 权重常驻L3：减少DRAM访问
+2. 激活分块：适配L2大小
+3. 使用NC4HW4布局：提高缓存命中率
+```
+
+#### Decode阶段优化策略
+
+Decode阶段是逐token生成，计算量小但延迟敏感：
+
+**1. KV Cache优化**：
+
+```
+Cache更新计算（批大小B，缓存长度L）：
+新K = XWk: [B, D] × [D, D] → [B, D]
+新V = XWv: [B, D] × [D, D] → [B, D]
+追加到Cache: [B, L, D] → [B, L+1, D]
+
+内存访问模式：
+- 顺序写入：利用写合并缓冲
+- 分页管理：避免大块内存移动
+```
+
+**NEON向量化实现**：
+```
+KV更新核心（INT8量化）：
+1. 加载新KV（使用vld1q_s8）
+2. 量化参数计算（使用vcvtq_f32_s32）
+3. 写入缓存（使用vst1q_s8）
+4. 更新页表指针
+```
+
+**2. 功耗优化**：
+
+```
+能耗模型：
+E = C × V² × f × t
+其中：C=电容，V=电压，f=频率，t=时间
+
+Decode阶段特点：
+- 计算量小：~4×D²每token
+- 时间长：可能持续数秒
+- 功耗敏感：影响续航
+
+优化策略：
+1. 降频运行：
+   - 大核：1.5GHz（50%频率）
+   - 功耗降低：~75%（V²f效应）
+   
+2. 迁移到小核：
+   - Cortex-A510：1.8GHz
+   - 功耗：<1W
+   - 性能足够：延迟增加<20%
+```
+
+**3. 动态负载均衡**：
+
+```
+token复杂度分类：
+- 简单token：高频词，预测概率>0.9
+- 复杂token：低频词，需要更多计算
+
+调度策略：
+if token_probability > 0.9:
+    schedule_to_little_core()
+else:
+    schedule_to_big_core()
+    
+收益：平均功耗降低40%，延迟增加<10%
+```
+
+#### 量化推理深度优化
+
+**1. INT8 GEMM优化**：
+
+```
+使用SMMLA的优化内核：
+输入：A[M,K], B[K,N]（INT8）
+输出：C[M,N]（INT32）
+
+寄存器分配（32个向量寄存器）：
+- V0-V7：存储A的8行
+- V8-V15：存储B的8列
+- V16-V31：存储8×8结果块
+
+内循环（处理8×8块）：
+for k in range(0, K, 8):
+    // 加载A和B的8个元素
+    LD1 {V0.16B-V7.16B}, [A_ptr]
+    LD1 {V8.16B-V15.16B}, [B_ptr]
+    
+    // 8×8矩阵乘法（8条SMMLA）
+    SMMLA V16.4S, V0.16B, V8.16B
+    SMMLA V17.4S, V0.16B, V9.16B
+    ... // 总共64条SMMLA
+    
+性能：每周期512个INT8 MAC操作
+```
+
+**2. 混合精度策略**：
+
+```
+层级精度分配（基于敏感度分析）：
+1. Embedding层：INT8（词表查找）
+2. Attention QKV投影：INT8
+3. Attention计算：FP16（数值稳定）
+4. FFN第一层：INT8
+5. FFN第二层：INT8
+6. 层归一化：FP16
+7. 输出层：FP16
+
+内存节省：~75%（相比FP32）
+性能提升：2-3倍（硬件加速）
+精度损失：<0.5% perplexity增加
+```
+
+**3. 动态量化优化**：
+
+```
+Per-token量化流程：
+1. 统计激活范围：
+   min_val = reduce_min(activations)
+   max_val = reduce_max(activations)
+   
+2. 计算量化参数：
+   scale = (max_val - min_val) / 255
+   zero_point = round(-min_val / scale)
+   
+3. 量化激活：
+   q_act = clamp(round(act/scale) + zero_point, 0, 255)
+   
+4. 使用SMMLA计算
+
+NEON实现关键：
+- 使用vminmaxq同时计算min/max
+- 使用vcvtq_n_s32_f32进行定点转换
+- 使用vqmovn饱和转换到INT8
+```
+
+#### 内存布局深度优化
+
+**1. 权重布局转换**：
+
+```
+原始布局：[out_channels, in_channels]
+优化布局：[out_channels/4, in_channels/4, 4, 4]
+
+转换算法：
+for oc in range(0, OC, 4):
+    for ic in range(0, IC, 4):
+        for oc_i in range(4):
+            for ic_i in range(4):
+                new[oc/4][ic/4][oc_i][ic_i] = old[oc+oc_i][ic+ic_i]
+
+优势：
+1. NEON vld4指令可直接加载4×4块
+2. 缓存行利用率提高4倍
+3. 避免跨缓存行访问
+```
+
+**2. 激活缓存优化**：
+
+```
+分块策略（考虑L2=1MB）：
+块大小计算：
+tile_m = tile_n = sqrt(L2_size / (3 × sizeof(dtype)))
+
+对于FP16：tile_size ≈ 362
+对于INT8：tile_size ≈ 512
+
+多级分块：
+L3块：2048×2048
+L2块：512×512  
+L1块：64×64
+寄存器块：8×8
+```
+
+**3. 预取优化模式**：
+
+```
+软件流水线（3级）：
+Stage 0: 计算当前块
+Stage 1: 预取下一块到L1
+Stage 2: 预取下下块到L2
+
+实现：
+// 计算块[i,j]
+compute_block(i, j)
+
+// 同时预取
+PRFM PLDL1KEEP, [next_block_addr]      // 到L1
+PRFM PLDL2KEEP, [next_next_block_addr] // 到L2
+
+// 使用非阻塞预取避免停顿
+```
+
+#### 性能监控与分析
+
+**1. 硬件性能计数器**：
+
+```
+关键指标监控：
+- 周期数：总执行周期
+- 指令数：已退休指令
+- L1 D-Cache未命中率
+- L2 Cache未命中率
+- 分支误预测率
+- NEON/SVE利用率
+
+计算公式：
+IPC = 指令数 / 周期数
+CPI = 周期数 / 指令数
+Cache命中率 = 1 - (未命中数 / 访问数)
+```
+
+**2. 功耗分析**：
+
+```
+功耗分解：
+- 动态功耗：P_dynamic = α × C × V² × f
+- 静态功耗：P_static = V × I_leakage
+- 总功耗：P_total = P_dynamic + P_static
+
+测量方法：
+1. 使用功耗监控API
+2. 计算能效比：Tokens/Joule
+3. 温度监控：避免过热降频
+```
+
+**3. 优化效果评估**：
+
+```
+基准测试指标：
+1. 首Token延迟（TTFT）：< 100ms
+2. Token生成速率：> 20 tokens/s
+3. 功耗效率：> 5 tokens/Joule
+4. 内存占用：< 2GB（INT8模型）
+
+优化前后对比：
+指标         优化前    优化后    提升
+TTFT        250ms     95ms     62%
+吞吐量      8 t/s     22 t/s   175%
+功耗        8W        3W       62%
+内存        4GB       1.5GB    62%
+```
 
 ## 20.2 Qualcomm Hexagon DSP编程
 
@@ -458,47 +842,366 @@ FP32运算: 8.0x
 
 #### Attention计算优化
 
-1. **Q/K/V投影**：
-   ```
-   分块大小：32×128（适配HVX）
-   使用VTCM存储部分权重
-   流水线化计算
-   ```
+Hexagon DSP的向量处理能力特别适合加速Transformer的注意力机制：
 
-2. **Softmax优化**：
-   ```
-   向量化exp计算
-   使用查找表近似
-   分块归一化避免溢出
-   ```
+**1. Q/K/V投影优化**：
 
-#### KV Cache管理
+```
+投影计算分析（头数H，维度D）：
+Q = XWq: [B, S, D] × [D, D] → [B, S, D]
+K = XWk: [B, S, D] × [D, D] → [B, S, D]
+V = XWv: [B, S, D] × [D, D] → [B, S, D]
 
-1. **分层存储**：
-   ```
-   热数据：VTCM（最近16个token）
-   温数据：L2 Cache
-   冷数据：DDR
-   ```
+HVX优化策略：
+- 分块大小：32×128（匹配HVX寄存器宽度）
+- 内存布局：[B, S/32, H, 32, D/H]（向量友好）
+```
 
-2. **压缩策略**：
-   - INT8量化KV Cache
-   - 只保留top-k注意力权重
-   - 动态剪枝低权重连接
+**VTCM权重管理**：
+```
+权重分配策略（VTCM=512KB）：
+1. 常驻权重：
+   - QKV投影矩阵：3×D×D×sizeof(INT8) ≈ 48MB（D=4096）
+   - 只能缓存部分：512KB / 48MB ≈ 1%
+   
+2. 分块加载：
+   - 块大小：128×128 INT8 = 16KB
+   - VTCM可存储：32个块
+   - 采用LRU替换策略
 
-#### 解码优化
+3. 预取流水线：
+   while (computing_block_i):
+       DMA_prefetch(block_i+1 → VTCM)
+       compute(block_i)
+       DMA_evict(block_i-1)
+```
 
-1. **投机解码适配**：
-   - 草稿模型运行在DSP
-   - 验证在CPU进行
-   - 利用HVX加速token生成
+**2. Softmax向量化实现**：
 
-2. **批处理策略**：
-   ```
-   小批量（1-4）：优先延迟
-   中批量（4-16）：平衡延迟和吞吐
-   大批量（>16）：最大化吞吐量
-   ```
+```
+数值稳定Softmax算法：
+1. 找最大值：max_val = max(scores)
+2. 计算exp：exp_scores = exp(scores - max_val)
+3. 求和：sum_exp = sum(exp_scores)
+4. 归一化：softmax = exp_scores / sum_exp
+
+HVX优化实现：
+// 步骤1：向量化max reduction
+V_max = vmem(scores_ptr)
+for i in range(1, N/64):
+    V_temp = vmem(scores_ptr + i*64)
+    V_max = vmax(V_max, V_temp)
+// 水平reduction
+max_val = vreduce_max(V_max)
+
+// 步骤2：查表近似exp
+// 使用8位查表：256项，精度±0.1%
+for i in range(0, N, 64):
+    V_score = vmem(scores_ptr + i)
+    V_shifted = vsub(V_score, V_max)
+    V_exp = vlut32(exp_table, V_shifted)
+    vmem(exp_ptr + i) = V_exp
+
+// 步骤3&4：求和与归一化
+sum_exp = vreduce_add(V_exp_all)
+V_inv_sum = vrecip(sum_exp)  // 倒数近似
+for i in range(0, N, 64):
+    V_exp = vmem(exp_ptr + i)
+    V_softmax = vmpy(V_exp, V_inv_sum)
+    vmem(output_ptr + i) = V_softmax
+```
+
+**3. 注意力矩阵计算**：
+
+```
+Flash Attention在Hexagon上的适配：
+块大小选择（考虑VTCM=512KB）：
+- Q块：[Br, d] = [32, 128]
+- K块：[Bc, d] = [32, 128]
+- V块：[Bc, d] = [32, 128]
+- S块：[Br, Bc] = [32, 32]
+
+内存需求：
+Q块：32×128×1 = 4KB（INT8）
+K块：32×128×1 = 4KB
+V块：32×128×1 = 4KB
+S块：32×32×2 = 2KB（FP16）
+O块：32×128×2 = 8KB（FP16）
+总计：22KB << 512KB（充裕）
+
+计算流程：
+for j in range(0, N, Bc):
+    // 加载K[j:j+Bc]和V[j:j+Bc]到VTCM
+    DMA_load(K_block, V_block)
+    
+    for i in range(0, N, Br):
+        // 加载Q[i:i+Br]到VTCM
+        DMA_load(Q_block)
+        
+        // 计算S = Q @ K^T（使用HVX）
+        for qi in range(Br):
+            for kj in range(Bc):
+                S[qi,kj] = vdot(Q[qi], K[kj])
+        
+        // Softmax（分块稳定版本）
+        row_max = vmax_reduce(S, axis=1)
+        S_stable = S - row_max
+        S_exp = vexp_approx(S_stable)
+        row_sum = vsum_reduce(S_exp, axis=1)
+        S_norm = S_exp / row_sum
+        
+        // 更新O = S @ V
+        for oi in range(Br):
+            for vj in range(d):
+                O[oi,vj] += vdot(S_norm[oi], V[:,vj])
+```
+
+#### KV Cache管理优化
+
+**1. 分层存储架构**：
+
+```
+存储层次设计：
+┌─────────────┐
+│   VTCM      │ 512KB，2周期延迟
+├─────────────┤ ↕ DMA
+│  L2 Cache   │ 1MB，10周期延迟  
+├─────────────┤ ↕ DMA
+│    DDR      │ 8GB，100+周期延迟
+└─────────────┘
+
+数据放置策略：
+1. VTCM（最热）：
+   - 最近16个token的KV
+   - 大小：16×2×D×sizeof(INT8) = 128KB（D=4096）
+   
+2. L2 Cache（温）：
+   - 最近128个token的KV
+   - 大小：128×2×D×sizeof(INT8) = 1MB
+   
+3. DDR（冷）：
+   - 其余所有历史KV
+   - 使用压缩存储
+```
+
+**2. 高效压缩算法**：
+
+```
+多级压缩策略：
+Level 1 - INT8量化（VTCM/L2）：
+- Scale计算：scale = (max - min) / 255
+- Zero point：zp = -min / scale
+- 量化：q = round(x / scale + zp)
+- 压缩率：4倍（FP32→INT8）
+
+Level 2 - Top-K稀疏化（L2/DDR边界）：
+- 保留每行top-32个最大值
+- 稀疏率：32/S（S=序列长度）
+- 存储格式：CSR（压缩稀疏行）
+
+Level 3 - 分组量化（DDR）：
+- 每64个token共享scale/zp
+- 进一步压缩元数据开销
+- 总压缩率：~16倍
+
+解压缩流水线：
+DDR → L2：分组反量化 + 稀疏恢复
+L2 → VTCM：INT8直接拷贝
+VTCM → HVX：向量加载 + 即时反量化
+```
+
+**3. 动态剪枝策略**：
+
+```
+注意力权重剪枝算法：
+阈值设定：threshold = mean(attention) × 0.1
+
+HVX实现：
+// 计算注意力权重均值
+V_sum = vreduce_add(V_attention)
+mean_val = V_sum / seq_length
+
+// 设置剪枝阈值
+V_threshold = vsplat(mean_val × 0.1)
+
+// 向量化剪枝
+for i in range(0, seq_length, 64):
+    V_att = vmem(attention_ptr + i)
+    V_mask = vcmp_gt(V_att, V_threshold)
+    V_pruned = vand(V_att, V_mask)
+    vmem(pruned_ptr + i) = V_pruned
+
+剪枝效果：
+- 平均保留20-30%的连接
+- 精度损失<0.1% perplexity
+- 计算加速3-4倍
+```
+
+#### 解码阶段深度优化
+
+**1. 投机解码的DSP实现**：
+
+```
+双模型架构：
+- 草稿模型：在Hexagon DSP运行
+  - 参数量：~100M（高度量化）
+  - 延迟：2ms/token
+  
+- 验证模型：在CPU运行
+  - 参数量：~7B
+  - 延迟：50ms/token
+
+投机解码流程：
+1. DSP生成K个草稿token（K=4）：
+   for i in range(K):
+       draft_token[i] = draft_model(context)
+       context.append(draft_token[i])
+   
+2. CPU并行验证：
+   logits = target_model(context[:-K])
+   for i in range(K):
+       if verify(draft_token[i], logits[i]):
+           accept_token(draft_token[i])
+       else:
+           break
+   
+3. 性能分析：
+   平均接受率：~80%（相似领域）
+   加速比：3.2倍（考虑验证开销）
+   DSP利用率：~90%
+```
+
+**2. 批处理优化策略**：
+
+```
+动态批处理算法：
+批大小选择因素：
+1. 内存约束：KV_cache_size × batch_size < VTCM_size
+2. 计算效率：batch_size ≥ HVX_width / token_dim
+3. 延迟要求：batch_latency < SLA
+
+优化决策树：
+if memory_pressure > 0.8:
+    batch_size = min(4, available_memory / kv_size)
+elif compute_utilization < 0.5:
+    batch_size = min(16, optimal_compute_batch)
+else:
+    batch_size = adaptive_size(latency_target)
+
+性能特征：
+批大小  延迟(ms)  吞吐量(tokens/s)  内存(MB)
+1       10        100               64
+4       15        267               256  
+8       22        364               512
+16      38        421               1024
+```
+
+**3. 硬件线程调度**：
+
+```
+Hexagon 6线程优化分配：
+Thread 0-1：主计算线程
+- 执行矩阵乘法
+- 向量运算
+
+Thread 2-3：DMA管理线程  
+- 预取权重
+- 移动KV cache
+
+Thread 4：控制线程
+- 调度协调
+- 同步管理
+
+Thread 5：辅助线程
+- Softmax/LayerNorm
+- 后处理
+
+线程间通信：
+使用硬件邮箱（零开销）：
+// Thread 0发送
+write_mailbox(THREAD_2, PREFETCH_NEXT_WEIGHT)
+
+// Thread 2接收
+if (read_mailbox() == PREFETCH_NEXT_WEIGHT):
+    DMA_start(weight_addr, VTCM_addr)
+```
+
+#### 能效优化深度分析
+
+**1. 指令级能耗建模**：
+
+```
+Hexagon指令能耗（相对值）：
+- 标量ALU：1.0×
+- 标量乘法：1.5×
+- HVX向量加法：8.0×（64路并行）
+- HVX向量乘法：12.0×
+- HVX点积：15.0×
+- DMA传输：20.0×/KB
+- VTCM访问：2.0×
+- L2访问：5.0×
+- DDR访问：50.0×
+
+优化原则：
+1. 最大化向量化（摊薄控制开销）
+2. 最小化内存访问（特别是DDR）
+3. 平衡计算与数据移动
+```
+
+**2. 动态电压频率优化**：
+
+```
+DVFS状态与LLM推理：
+┌──────────┬────────┬────────┬─────────┐
+│  状态    │ 频率   │ 电压   │ 功耗    │
+├──────────┼────────┼────────┼─────────┤
+│ TURBO    │ 1.2GHz │ 1.1V   │ 3.0W    │
+│ NOMINAL  │ 800MHz │ 0.9V   │ 1.5W    │
+│ SVS      │ 500MHz │ 0.8V   │ 0.8W    │
+│ LOW_SVS  │ 300MHz │ 0.7V   │ 0.4W    │
+└──────────┴────────┴────────┴─────────┘
+
+自适应策略：
+if prefill_phase:
+    set_dvfs(TURBO)  # 最大性能
+elif decode_phase:
+    if queue_depth > threshold:
+        set_dvfs(NOMINAL)  # 平衡模式
+    else:
+        set_dvfs(SVS)  # 省电模式
+
+能效分析：
+- Prefill：10 tokens/焦耳@TURBO
+- Decode：50 tokens/焦耳@SVS
+- 混合：30 tokens/焦耳（典型）
+```
+
+**3. 热管理优化**：
+
+```
+温度监控与调节：
+温度阈值：
+- 警告：70°C
+- 降频：80°C
+- 关闭：90°C
+
+热缓解策略：
+1. 预测性降频：
+   if temp_trend > 2°C/秒:
+       preemptive_throttle()
+       
+2. 任务迁移：
+   if core_temp > 75°C:
+       migrate_to_cooler_core()
+       
+3. 计算分散：
+   insert_idle_cycles(duty_cycle=0.8)
+
+实测效果：
+- 峰值温度降低：15°C
+- 性能损失：<10%
+- 持续运行时间：延长3倍
+```
 
 ## 20.3 移动GPU优化（Mali/Adreno）
 
