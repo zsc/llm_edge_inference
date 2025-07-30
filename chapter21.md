@@ -28,27 +28,50 @@ $$Y[n,c_o,y,x] = \sum_{c_i,ky,kx} X[n,c_i,y \cdot s_y + ky \cdot d_y - p_y, x \c
 
 这些优化可以显著提升推理性能，典型加速比为1.5-3×。
 
+**扩展的算子支持**：ONNX生态系统持续演进，通过onnx-contrib增加了许多domain-specific算子：
+- com.microsoft domain：包含专门的Transformer算子如FusedMatMul、SkipLayerNormalization
+- ai.onnx.ml domain：机器学习传统算法支持
+- ai.onnx.training domain：训练相关算子
+
+这些扩展显著提升了ONNX对现代模型的支持能力。
+
 然而，ONNX在实际应用中也存在显著限制：
 
-**动态图支持有限**：虽然ONNX支持动态shape，但对于包含复杂控制流的模型（如包含动态循环的Transformer变体），转换可能失败或产生次优结果。
+**动态图支持有限**：虽然ONNX支持动态shape，但对于包含复杂控制流的模型（如包含动态循环的Transformer变体），转换可能失败或产生次优结果。控制流算子（If、Loop、Scan）的实现在不同backend差异很大，often导致性能下降。
 
 **自定义算子问题**：许多前沿模型使用了框架特定的优化算子（如Flash Attention），这些算子在ONNX中没有对应定义，需要：
-1. 使用ONNX的Custom Op机制
-2. 将复杂算子分解为基础算子组合
-3. 在目标框架中重新实现
+1. 使用ONNX的Custom Op机制，但会降低模型的可移植性
+2. 将复杂算子分解为基础算子组合，可能损失10-50%的性能
+3. 在目标框架中重新实现，增加部署复杂度
 
-**量化信息丢失**：ONNX的量化支持仍在发展中。QDQ（Quantize-Dequantize）模式虽然提供了基础支持，但许多高级量化技术（如per-channel非对称量化、混合精度量化）的信息可能在转换中丢失。
+例如，Flash Attention的分解会导致：
+- 失去tiling优化带来的内存效率
+- 中间结果materialization增加内存使用
+- 无法利用fused kernel的性能优势
+
+**量化信息丢失**：ONNX的量化支持仍在发展中。QDQ（Quantize-Dequantize）模式虽然提供了基础支持，但许多高级量化技术的信息可能在转换中丢失：
+- Per-channel非对称量化：需要额外的scale/zero_point张量
+- 混合精度量化：缺乏标准的表示方法
+- 动态量化：运行时校准信息难以保存
+- 量化训练（QAT）的fake quantization节点often被误解释
 
 **性能可移植性问题**：ONNX模型在不同后端的性能表现可能差异很大。一个在GPU上优化良好的ONNX图，在CPU或NPU上可能需要完全不同的优化策略。这需要：
-- Backend-specific图重写
-- 算子实现的性能建模
-- 自适应的优化策略选择
+- Backend-specific图重写：如CPU偏好depth-wise分解，GPU偏好大kernel融合
+- 算子实现的性能建模：不同backend的算子性能特征差异巨大
+- 自适应的优化策略选择：基于目标硬件动态选择优化pass
+
+**内存布局不一致**：不同框架对tensor布局的假设不同：
+- PyTorch默认使用NCHW（channels_first）
+- TensorFlow often使用NHWC（channels_last）
+- ONNX需要显式的Transpose操作，增加内存开销
 
 **实践建议**：
 1. 优先使用高版本ONNX opset（如opset 17+），支持更多算子
 2. 转换前简化模型结构，移除不必要的操作
 3. 使用onnx-simplifier工具优化转换后的模型
 4. 保留原始模型用于精度对比和调试
+5. 对关键路径进行profile，识别转换导致的性能瓶颈
+6. 考虑使用ONNX Runtime Extensions处理自定义算子
 
 ### 21.1.2 PyTorch到TensorRT的转换流程与陷阱
 
@@ -190,9 +213,11 @@ TensorFlow Lite专为移动和嵌入式设备设计，其转换流程强调模�
 **转换流程的核心步骤**：
 
 1. **图优化与剪枝**：
-   - 移除训练专用节点（如Dropout）
-   - 常量折叠和死代码消除
-   - 算子融合（如BatchNorm折叠到Conv中）
+   - 移除训练专用节点（如Dropout、BatchNorm的training mode）
+   - 常量折叠和死代码消除：预计算所有静态子图
+   - 算子融合（如BatchNorm折叠到Conv中）：
+     $$W' = \frac{\gamma}{\sqrt{\sigma^2 + \epsilon}} \cdot W, \quad b' = \frac{\gamma}{\sqrt{\sigma^2 + \epsilon}} \cdot (b - \mu) + \beta$$
+   - 形状推断和维度简化：消除冗余的reshape/transpose
 
 2. **量化选项详解**：
 
@@ -202,16 +227,49 @@ $$W_{int8} = round(W_{fp32} / scale) + zero\_point$$
 其中scale和zero_point通过最小化量化误差确定：
 $$\min_{scale, zp} ||W_{fp32} - (W_{int8} - zp) \times scale||_2^2$$
 
+优化算法使用的是基于直方图的方法：
+- 构建权重分布直方图（typically 2048 bins）
+- 尝试不同的clipping阈值
+- 选择使KL散度最小的参数
+
 **全整数量化**：权重和激活都量化为INT8。需要代表性数据集进行校准：
 $$Y_{int8} = round(Y_{fp32} / scale_y) + zp_y$$
 
 量化参数通过统计激活值分布确定，通常使用移动平均更新：
 $$scale_{new} = \alpha \cdot scale_{old} + (1-\alpha) \cdot scale_{batch}$$
 
+校准策略的关键考虑：
+- 校准数据应覆盖真实使用场景的分布
+- 通常需要100-500个代表性样本
+- 使用percentile方法（如99.9%）确定量化范围，避免outlier影响
+
 **量化感知训练（QAT）集成**：
-- 在训练时模拟量化效果
-- 使用直通估计器（STE）进行梯度传播
-- 可以显著减少量化导致的精度损失
+- 在训练时模拟量化效果：forward pass使用量化值，backward pass使用浮点
+- 使用直通估计器（STE）进行梯度传播：
+  $$\frac{\partial L}{\partial w} = \frac{\partial L}{\partial \hat{w}} \cdot \mathbf{1}_{|w| \leq \alpha}$$
+- 可以显著减少量化导致的精度损失（typically <0.5% accuracy drop）
+
+**Float16量化**：针对支持FP16的移动GPU：
+- 权重和激活转换为半精度
+- 保留FP32 accumulator避免溢出
+- 内存使用减半，计算提速1.5-2×
+
+3. **高级优化技术**：
+
+**稀疏性利用**：
+- 结构化稀疏（2:4模式）：每4个元素中2个为零
+- 非结构化稀疏：使用CSR/CSC格式存储
+- 稀疏量化结合：进一步压缩模型
+
+**算子特定优化**：
+- Depthwise卷积：专门的SIMD实现
+- 矩阵乘法：使用Ruy库的优化kernel
+- 激活函数：查表法近似实现
+
+**内存分配优化**：
+- Arena内存分配器：预分配内存池
+- 张量生命周期分析：复用内存buffer
+- 内存映射权重：减少加载时间
 
 ### 21.1.4 模型精度验证方法论
 
@@ -224,21 +282,57 @@ $$\delta_i = \frac{||Y_i^{platform1} - Y_i^{platform2}||_2}{||Y_i^{platform1}||_
 
 当$\delta_i$超过阈值（如1e-3）时，需要深入分析该层的实现差异。
 
+**高级数值分析技术**：
+- **相对误差分布**：绘制误差直方图，识别systematic bias vs random error
+- **最大绝对误差**：$\max|Y_i^{p1} - Y_i^{p2}|$，捕捉worst-case偏差
+- **余弦相似度**：$\frac{Y_1 \cdot Y_2}{||Y_1|| \cdot ||Y_2||}$，对方向敏感的任务更relevant
+- **梯度分析**：比较反向传播梯度，确保训练一致性
+
 **2. 统计分布比较**
 
 除了逐点比较，统计特性的比较同样重要：
 - 均值偏移：$|\mu_1 - \mu_2| / |\mu_1|$
 - 方差变化：$|\sigma_1^2 - \sigma_2^2| / \sigma_1^2$
 - 分位数对比：特别关注极值的变化
+- 峰度和偏度：检测分布形状变化
+
+**分布距离度量**：
+- KL散度：$D_{KL}(P||Q) = \sum_i P(i) \log \frac{P(i)}{Q(i)}$
+- Wasserstein距离：对小偏移更敏感
+- JS散度：对称版本的KL散度
 
 **3. 端到端任务指标**
 
 最终的验证应基于实际任务：
-- 分类任务：Top-1/Top-5准确率变化
-- 生成任务：Perplexity变化、BLEU分数对比
-- 回归任务：MSE/MAE变化
+- 分类任务：Top-1/Top-5准确率变化，混淆矩阵分析
+- 生成任务：Perplexity变化、BLEU/ROUGE分数对比
+- 回归任务：MSE/MAE变化，残差分析
+- 检测任务：mAP变化，IoU阈值敏感性
 
 建议设置严格的退化阈值，如准确率下降不超过0.5%。
+
+**4. 边界案例测试**
+
+系统性测试模型在极端输入下的行为：
+- **数值边界**：接近0、非常大/小的值
+- **稀疏输入**：大量零值或重复值
+- **对抗样本**：轻微扰动的输入
+- **分布外数据**：训练分布外的输入
+
+**5. 性能-精度权衡分析**
+
+构建Pareto前沿帮助决策：
+- X轴：推理延迟或模型大小
+- Y轴：任务精度指标
+- 识别knee point：边际收益递减点
+
+**6. A/B测试框架**
+
+生产环境的验证策略：
+- **影子模式**：新模型并行运行但不影响输出
+- **金丝雀发布**：小流量测试
+- **在线指标监控**：实时跟踪精度指标
+- **回滚机制**：快速恢复到稳定版本
 
 ### 21.1.5 算子兼容性矩阵与Fallback策略
 
@@ -252,22 +346,70 @@ $$\delta_i = \frac{||Y_i^{platform1} - Y_i^{platform2}||_2}{||Y_i^{platform1}||_
 ```
 
 例如，LayerNorm在不同平台的支持：
-- TensorRT 8.x：原生支持（FP32/FP16）
-- CoreML：需要分解为均值、方差、缩放操作
-- NNAPI：不支持，需要CPU fallback
+- TensorRT 8.x：原生支持（FP32/FP16/INT8 with dequant）
+- CoreML 5+：原生支持
+- CoreML 4-：需要分解为均值、方差、缩放操作
+- NNAPI 1.3+：通过扩展算子支持
+- NNAPI 1.2-：需要CPU fallback
+- OpenVINO：原生支持，可自动融合
+
+**算子兼容性数据库设计**：
+```json
+{
+  "LayerNorm": {
+    "TensorRT": {"8.0+": ["FP32", "FP16", "INT8"], "7.x": ["decompose"]},
+    "CoreML": {"5.0+": ["all"], "4.x": ["decompose"]},
+    "NNAPI": {"1.3+": ["FP32", "FP16"], "1.2-": ["fallback"]},
+    "SNPE": {"2.0+": ["FP32", "INT8"], "1.x": ["custom_layer"]}
+  }
+}
+```
 
 **Fallback策略设计**：
 
 1. **算子分解**：将复杂算子分解为基础操作
    例如，GELU激活函数可以分解为：
    $$GELU(x) = x \cdot \Phi(x) \approx 0.5x(1 + tanh(\sqrt{2/\pi}(x + 0.044715x^3)))$$
+   
+   分解策略选择：
+   - 高精度需求：使用erf函数 $GELU(x) = x \cdot \frac{1}{2}[1 + erf(x/\sqrt{2})]$
+   - 平衡选择：tanh近似（上式）
+   - 高性能需求：sigmoid近似 $GELU(x) \approx x \cdot \sigma(1.702x)$
 
 2. **混合执行**：部分算子在CPU上执行
    - 评估数据传输开销：$T_{transfer} = Size_{data} / Bandwidth_{PCIe}$
    - 只有当$T_{compute}^{CPU} + T_{transfer} < T_{compute}^{Accelerator}$时才使用fallback
+   - 考虑内存拷贝的对齐要求和缓存影响
+   
+   **智能调度决策**：
+   ```
+   if (op_complexity < threshold && data_size < cache_size):
+       execute_on_cpu()  # 小算子CPU更高效
+   elif (accelerator_not_supported(op)):
+       if (can_decompose(op)):
+           decompose_and_execute()
+       else:
+           cpu_fallback_with_optimization()
+   ```
 
 3. **精度降级**：在保证精度的前提下使用近似算法
    如使用Fast GELU近似：$GELU(x) \approx x \cdot \sigma(1.702x)$
+   
+   **自适应精度选择**：
+   - 监测输入数据范围
+   - 当输入主要在[-3, 3]区间时，近似误差<0.1%
+   - 超出范围时自动切换到精确实现
+
+4. **算子融合补偿**：
+   当目标平台不支持某些融合算子时，通过其他融合弥补性能损失：
+   - Conv+BN+ReLU → Conv+BN, ReLU（如果不支持三元融合）
+   - Multi-head Attention → 分解但保持QKV projection融合
+   - 使用更大的tile size补偿融合损失
+
+5. **预编译算子库**：
+   - 为常见不支持算子准备优化实现
+   - 使用目标平台的原生指令集（如NEON、AVX）
+   - 维护性能profile指导运行时选择
 
 ## 21.2 性能分析与瓶颈定位
 
@@ -283,50 +425,125 @@ NSight提供了全面的GPU性能分析能力：
    - CUDA kernel执行时间和并发性
    - 内存传输（H2D/D2H）开销
    - CPU-GPU同步点识别
+   - CUDA Graph执行追踪
+   
+   **高级时间线特性**：
+   - NVLink传输可视化
+   - Multi-GPU同步分析
+   - CUDA流（Stream）并发度评估
+   - Kernel重叠机会识别
 
 2. **指标收集**：
    关键指标包括：
    - SM占用率（Occupancy）：$Occupancy = \frac{Active\ Warps}{Max\ Warps}$
    - 内存带宽利用率：$BW_{util} = \frac{Actual\ Bandwidth}{Peak\ Bandwidth}$
    - 计算吞吐量：$\frac{Achieved\ FLOPs}{Peak\ FLOPs}$
+   - 分支发散度：$Branch\ Efficiency = \frac{Non\_divergent\_branches}{Total\_branches}$
+   
+   **Tensor Core特定指标**：
+   - Tensor Core利用率
+   - 混合精度操作比例
+   - Tensor Memory Accelerator (TMA)使用情况
+   - Warp级别的矩阵操作效率
 
 3. **瓶颈识别方法**：
    使用Roofline模型定位瓶颈：
    $$Performance = \min(Peak\ FLOPs, Peak\ Bandwidth \times Arithmetic\ Intensity)$$
+   
+   **层次化Roofline分析**：
+   - L1 cache roofline
+   - L2 cache roofline  
+   - HBM/GDDR roofline
+   - 跨层次的数据移动分析
 
 **Qualcomm Snapdragon Profiler**：
 
 针对移动SoC的特殊考虑：
 
 1. **多处理器协同分析**：
-   - CPU集群（大核/小核）利用率
-   - GPU渲染与计算负载
-   - DSP（Hexagon）使用情况
-   - NPU（HTA/HTP）激活状态
+   - CPU集群（大核/中核/小核）利用率和迁移模式
+   - GPU渲染与计算负载的时分复用
+   - DSP（Hexagon）使用情况：HVX向量处理单元利用率
+   - NPU（HTA/HTP）激活状态和层映射
+   
+   **异构调度分析**：
+   - 任务在处理器间的迁移开销
+   - 数据在不同内存域的拷贝
+   - 处理器间同步开销
+   - 最优任务分配建议
 
 2. **功耗相关指标**：
-   - 各组件的功耗分解
+   - 各组件的功耗分解（mW级别精度）
    - 温度监控与热节流（Thermal Throttling）检测
-   - DVFS状态转换
+   - DVFS状态转换和驻留时间
+   - 能效比（Performance per Watt）追踪
+   
+   **高级功耗分析**：
+   - 功耗热点识别
+   - 睡眠状态转换效率
+   - 唤醒源分析
+   - 功耗预算分配优化
 
 3. **内存子系统分析**：
-   - Cache命中率层次分析（L1/L2/L3）
-   - DRAM带宽使用模式
-   - 内存延迟分布
+   - Cache命中率层次分析（L1/L2/L3/System Cache）
+   - DRAM带宽使用模式（读写比例、突发特征）
+   - 内存延迟分布（P50/P90/P99）
+   - 内存控制器拥塞分析
+   
+   **内存效率指标**：
+   - 有效带宽vs理论带宽
+   - 内存访问局部性评分
+   - Prefetcher效率
+   - 内存压缩收益
 
 **Apple Instruments**：
 
 专注于统一内存架构的优化：
 
 1. **Metal Performance Shaders分析**：
-   - Kernel执行效率
-   - 内存访问模式优化
-   - Texture使用分析
+   - Kernel执行效率和并发度
+   - 内存访问模式优化（coalescing分析）
+   - Texture使用分析（采样器效率）
+   - Tile-based渲染优化机会
+   
+   **Neural Network专用分析**：
+   - MPSGraph执行追踪
+   - 层融合效果评估
+   - 精度转换开销
+   - 内存池使用效率
 
 2. **Neural Engine利用率**：
-   - ANE vs GPU任务分配
-   - 量化模型的加速效果
-   - 功耗效率对比
+   - ANE vs GPU vs CPU任务分配决策
+   - 量化模型的加速效果（INT8/INT16性能）
+   - 功耗效率对比（GOPS/W）
+   - ANE编译器优化建议
+   
+   **ANE特定优化**：
+   - 层分组（Layer Grouping）效率
+   - 权重压缩效果
+   - 激活函数硬件映射
+   - 内存带宽节省分析
+
+**Intel VTune Profiler**：
+
+x86平台的深度分析：
+
+1. **微架构分析**：
+   - 流水线利用率
+   - 分支预测准确率
+   - μop缓存命中率
+   - 端口（Port）利用率分析
+
+2. **向量化分析**：
+   - AVX-512/AVX2/SSE利用率
+   - 向量化效率评估
+   - 内存对齐影响
+   - Gather/Scatter性能
+
+3. **NUMA感知分析**：
+   - 跨NUMA节点访问
+   - 内存分配策略影响
+   - 进程/线程绑定建议
 
 ### 21.2.2 算子级性能分解方法
 
@@ -338,10 +555,18 @@ NSight提供了全面的GPU性能分析能力：
 $$T_{op} = T_{launch} + T_{compute} + T_{memory} + T_{sync}$$
 
 其中：
-- $T_{launch}$：Kernel启动开销（通常为微秒级）
+- $T_{launch}$：Kernel启动开销（GPU: 5-20μs, CPU: <1μs）
 - $T_{compute}$：实际计算时间
 - $T_{memory}$：内存访问时间
 - $T_{sync}$：同步等待时间
+
+**细化的时间分解模型**：
+$$T_{compute} = T_{issue} + T_{execute} + T_{stall}$$
+
+其中：
+- $T_{issue}$：指令发射延迟
+- $T_{execute}$：算术单元执行时间
+- $T_{stall}$：流水线停顿（数据依赖、资源冲突）
 
 **2. 计算密度分析**
 
@@ -351,20 +576,55 @@ $$Compute\ Density = \frac{FLOPs}{Memory\ Accesses}$$
 以矩阵乘法为例：
 - 朴素实现：$CD = \frac{2mnk}{mn + nk + mk} \approx \frac{2k}{3}$（当m≈n≈k）
 - 分块优化：$CD = \frac{2B^3}{3B^2} = \frac{2B}{3}$（B为块大小）
+- 理论上界：$CD_{max} = \frac{2mnk}{2(mn + nk + mk)/(BW_{L1}/BW_{DRAM})}$
 
 这解释了为什么大矩阵乘法更容易达到峰值性能。
+
+**不同算子的典型计算密度**：
+- GEMM (large): 50-500 FLOPs/byte
+- Conv2D: 10-100 FLOPs/byte  
+- ElementWise: 0.25-1 FLOPs/byte
+- Softmax: 2-5 FLOPs/byte
+- LayerNorm: 3-6 FLOPs/byte
 
 **3. 内存访问模式优化**
 
 分析内存访问的局部性：
-- 空间局部性：连续访问评分
-- 时间局部性：重用距离分布
+- 空间局部性：连续访问评分 $S_{spatial} = \frac{Sequential\_accesses}{Total\_accesses}$
+- 时间局部性：重用距离分布 $P(reuse\_distance < cache\_size)$
 - 访问步长：是否触发cache line分割
 
 对于Transformer中的注意力计算：
 $$Attention(Q,K,V) = softmax(\frac{QK^T}{\sqrt{d_k}})V$$
 
 内存访问模式分析显示K的转置操作often导致非连续访问，这是Flash Attention优化的关键动机。
+
+**内存访问模式分类**：
+1. **Unit Stride**: 连续访问，最优模式
+2. **Strided**: 固定步长，可预取
+3. **Random**: 随机访问，cache不友好
+4. **Streaming**: 只读一次，bypass cache
+
+**4. 指令级并行度（ILP）分析**
+
+评估算子内部的并行机会：
+$$ILP = \frac{Total\_Instructions}{Critical\_Path\_Length}$$
+
+**提升ILP的技术**：
+- Loop unrolling：减少循环开销
+- Software pipelining：重叠不同迭代
+- Instruction scheduling：最大化独立指令
+- Register blocking：提高寄存器重用
+
+**5. 向量化效率评估**
+
+$$Vectorization\_Efficiency = \frac{Vector\_Operations}{Total\_Operations} \times \frac{Actual\_Vector\_Width}{Max\_Vector\_Width}$$
+
+**常见向量化障碍**：
+- 数据依赖：循环携带依赖
+- 内存对齐：非对齐访问性能损失
+- 控制流分歧：条件语句破坏向量化
+- 混合数据类型：类型转换开销
 
 ### 21.2.3 内存带宽vs计算瓶颈识别
 
@@ -450,10 +710,17 @@ $$B_{opt} = \arg\min_B \{Latency(B) \times Cost_{latency} + \frac{1}{Throughput(
 $$T_{total} = T_{init} + T_{prefill} + \sum_{i=1}^{N} T_{decode_i} + T_{post}$$
 
 其中：
-- $T_{init}$：模型加载和初始化
-- $T_{prefill}$：处理输入prompt
-- $T_{decode_i}$：生成第i个token
-- $T_{post}$：后处理（如detokenization）
+- $T_{init}$：模型加载和初始化（typically 100ms-10s）
+- $T_{prefill}$：处理输入prompt（scales with input length）
+- $T_{decode_i}$：生成第i个token（relatively constant）
+- $T_{post}$：后处理（如detokenization，typically <1ms）
+
+**详细的初始化时间分解**：
+$$T_{init} = T_{load} + T_{decompress} + T_{layout} + T_{warmup}$$
+- $T_{load}$：从存储加载模型权重
+- $T_{decompress}$：解压缩（如果使用压缩格式）
+- $T_{layout}$：内存布局转换
+- $T_{warmup}$：JIT编译和缓存预热
 
 **2. 细粒度分解**
 
@@ -465,6 +732,18 @@ $$T_{layer} = T_{attn} + T_{ffn} + T_{norm} + T_{residual}$$
 注意力计算分解：
 $$T_{attn} = T_{qkv\_proj} + T_{qk\_matmul} + T_{softmax} + T_{av\_matmul} + T_{out\_proj}$$
 
+**更细粒度的FFN分解**：
+$$T_{ffn} = T_{up\_proj} + T_{act} + T_{down\_proj}$$
+
+**典型时间占比（以LLaMA-7B为例）**：
+- QKV projection: 15-20%
+- QK matmul: 20-25%
+- Softmax: 5-10%
+- AV matmul: 15-20%
+- Output projection: 10-15%
+- FFN: 25-30%
+- Layer normalization: 2-5%
+
 **3. 优化优先级确定**
 
 基于Amdahl定律确定优化优先级：
@@ -475,24 +754,61 @@ $$Speedup_{overall} = \frac{1}{(1-p) + \frac{p}{s}}$$
 优先级评分：
 $$Priority = Time\_Percentage \times Optimization\_Potential \times Implementation\_Ease$$
 
+**扩展的优先级模型**：
+$$Priority = \frac{T_{percentage} \times S_{potential} \times E_{implementation}}{R_{risk} \times C_{complexity}}$$
+
+其中：
+- $R_{risk}$：实现风险（精度损失、稳定性）
+- $C_{complexity}$：维护复杂度
+
 **4. 常见优化机会**
 
 基于大量实践，典型的优化机会包括：
 
 - **Attention优化**（通常占40-50%时间）：
-  - 使用Flash Attention或类似技术
-  - KV cache压缩
-  - 稀疏注意力模式
+  - 使用Flash Attention或类似技术（2-4×加速）
+  - KV cache压缩（减少50-75%内存）
+  - 稀疏注意力模式（如Sliding Window）
+  - Group Query Attention（8-16×KV cache reduction）
 
 - **线性层优化**（占30-40%时间）：
-  - 权重量化（INT8/INT4）
-  - 矩阵乘法kernel优化
+  - 权重量化（INT8: 2-4×加速，INT4: 4-8×加速）
+  - 矩阵乘法kernel优化（使用vendor库）
   - 激活重计算vs存储权衡
+  - Structured pruning（2:4稀疏性）
 
 - **内存传输优化**（占10-20%时间）：
-  - 算子融合减少中间结果
-  - 优化数据布局
+  - 算子融合减少中间结果（节省20-30%带宽）
+  - 优化数据布局（NHWC vs NCHW）
   - 预取和流水线并行
+  - 使用Pinned Memory减少H2D/D2H开销
+
+- **其他优化机会**：
+  - 动态Batch调度（提高GPU利用率）
+  - Continuous Batching（减少padding开销）
+  - 投机解码（1.5-3×端到端加速）
+  - 模型并行优化（减少通信开销）
+
+**5. 性能优化决策树**
+
+```
+1. Profile整体时间分布
+   ├─ Attention > 45%？
+   │  └─ 优先考虑Flash Attention类优化
+   ├─ Memory Bound？
+   │  └─ 优先考虑量化和算子融合
+   └─ Compute Bound？
+      └─ 优先考虑kernel优化和硬件升级
+```
+
+**6. 优化效果预测模型**
+
+预测优化后的性能：
+$$T_{optimized} = \sum_{i} T_i \times (1 - O_i \times E_i)$$
+
+其中：
+- $O_i$：第i个优化的理论改进比例
+- $E_i$：实际效率因子（通常0.6-0.9）
 
 ## 21.3 功耗优化策略
 
@@ -561,21 +877,26 @@ DVFS切换开销：
 
 ### 21.3.2 大小核调度策略
 
-异构多核架构（如ARM big.LITTLE）的调度优化：
+异构多核架构（如ARM big.LITTLE、Intel P-core/E-core）的调度优化：
 
 **1. 任务特征分析**
 
 不同任务适合不同核心：
 
 **大核适合**：
-- 计算密集型：矩阵乘法、卷积
-- 延迟敏感：用户交互响应
-- 单线程性能关键：串行代码段
+- 计算密集型：矩阵乘法（GEMM）、卷积运算
+- 延迟敏感：用户交互响应、实时推理
+- 单线程性能关键：串行代码段、关键路径
+- 高IPC任务：指令级并行度高的代码
 
 **小核适合**：
-- I/O密集型：数据加载、预处理
-- 并行度高：可以多核并行的任务
-- 能效优先：后台任务
+- I/O密集型：数据加载、预处理、后处理
+- 并行度高：可以多核并行的embarrassingly parallel任务
+- 能效优先：后台任务、批处理
+- 低IPC任务：内存受限的操作
+
+**任务特征量化**：
+$$Task\_Profile = \{IPC, Cache\_Miss\_Rate, Branch\_Mispred\_Rate, Memory\_BW\_Usage\}$$
 
 **2. 动态迁移策略**
 
@@ -583,35 +904,87 @@ DVFS切换开销：
 
 $$Migration\_Score = w_1 \cdot IPC + w_2 \cdot Memory\_Stall\_Ratio + w_3 \cdot Power\_Budget$$
 
-当$Migration\_Score > Threshold$时，考虑迁移到大核。
+**扩展的迁移决策模型**：
+$$Decision = \begin{cases}
+Migrate\_to\_big & \text{if } Score > T_{high} \text{ and } BigCore\_Available \\
+Stay & \text{if } T_{low} \leq Score \leq T_{high} \\
+Migrate\_to\_little & \text{if } Score < T_{low} \text{ and } Power\_Critical
+\end{cases}$$
 
 迁移开销模型：
 $$Cost_{migration} = T_{pause} + T_{state\_transfer} + T_{cache\_warmup}$$
 
-只有当预期收益大于迁移开销时才执行迁移。
+详细开销分解：
+- $T_{pause}$：任务暂停时间（~10μs）
+- $T_{state\_transfer}$：寄存器和上下文迁移（~50μs）
+- $T_{cache\_warmup}$：缓存重建时间（~100μs-1ms）
+
+只有当预期收益大于迁移开销时才执行迁移：
+$$Expected\_Benefit = (Performance_{new} - Performance_{current}) \times Remaining\_Time > Cost_{migration}$$
 
 **3. 并行任务分配**
 
 对于Transformer推理的并行化：
 
-**层间并行**：
-- 将不同层分配到不同核心
-- 考虑层的计算量差异
-- 平衡负载避免等待
+**层间流水线并行**：
+```
+Stage 1 (Little cores): Embedding + Early Layers
+Stage 2 (Big cores): Middle Layers (heavy computation)
+Stage 3 (Mixed): Late Layers + Output Processing
+```
 
-**张量并行**：
-- 大矩阵乘法分割到多核
-- 小核处理reduce操作
-- 大核处理主要计算
+**张量并行策略**：
+- 大矩阵乘法分割：
+  $$C = AB \rightarrow C_i = A_i B \text{ (row-wise split)}$$
+- 小核处理reduce操作：
+  $$Final = \sum_i Partial_i$$
+- 大核处理主要计算块
+
+**数据并行分配**：
+- Batch维度划分：大核处理larger batches
+- Sequence维度划分：根据序列长度动态分配
+- Head维度划分：不同attention heads到不同核
 
 **4. 能效感知调度**
 
 综合考虑性能和功耗：
 $$Utility = \frac{Performance^α}{Power^β}$$
 
-其中α和β根据应用需求调整：
-- 延迟关键：α > β
-- 能效优先：α < β
+**自适应参数调整**：
+```
+if battery_level < 20%:
+    α = 0.3, β = 0.7  # 能效优先
+elif plugged_in:
+    α = 0.9, β = 0.1  # 性能优先
+else:
+    α = 0.5, β = 0.5  # 平衡模式
+```
+
+**5. 实时调度算法**
+
+**EAS (Energy Aware Scheduling)**：
+$$Energy\_Cost = P_{active} \times T_{execution} + P_{idle} \times T_{idle}$$
+
+选择使总能耗最小的核心分配方案。
+
+**ML-based调度器**：
+- 输入特征：任务类型、当前负载、功耗状态
+- 输出：最优核心分配
+- 在线学习：根据实际运行结果更新模型
+
+**6. 实践优化技巧**
+
+**亲和性设置**：
+```
+# Linux taskset示例
+taskset -c 0-3 ./small_task  # 绑定到小核
+taskset -c 4-7 ./big_task    # 绑定到大核
+```
+
+**调度策略切换**：
+- Interactive模式：快速响应用户输入
+- Powersave模式：优先使用小核
+- Performance模式：激进使用大核
 
 ### 21.3.3 精度-功耗权衡曲线
 
@@ -712,14 +1085,22 @@ $$PD = \frac{Power}{Area}$$
 
 随着工艺进步，晶体管密度增加快于面积，导致：
 - 热点（Hot Spots）形成
-- 局部温度可能远高于平均温度
+- 局部温度可能远高于平均温度（差异可达20-30°C）
+- 热应力导致的机械可靠性问题
+
+**现代芯片的功耗密度**：
+- Desktop CPU: 50-100 W/cm²
+- Mobile SoC: 10-30 W/cm²
+- AI加速器: 100-300 W/cm²（局部热点）
 
 **2. 温度对性能的影响**
 
 **静态功耗增加**：
 $$P_{leakage} \propto T^2 \times e^{\frac{V}{kT}}$$
 
-温度上升导致泄漏功耗指数增长。
+温度上升导致泄漏功耗指数增长。具体数据：
+- 25°C → 85°C：泄漏功耗增加5-10×
+- 占总功耗比例：从10%增至40%
 
 **可靠性下降**：
 Arrhenius方程描述了温度对寿命的影响：
@@ -727,36 +1108,104 @@ $$MTTF \propto e^{\frac{E_a}{kT}}$$
 
 每升高10°C，寿命approximately减半。
 
+**时序退化**：
+$$Delay \propto (1 + \alpha \cdot \Delta T)$$
+
+其中α ≈ 0.002/°C，意味着温升50°C导致10%的性能下降。
+
 **3. 热管理策略**
 
 **预测性热管理**：
-使用热模型预测温度：
+使用RC热模型预测温度：
 $$\frac{dT}{dt} = \frac{P(t) - K(T - T_{ambient})}{C_{thermal}}$$
 
-其中：
-- P(t)：功耗
-- K：热传导系数
-- $C_{thermal}$：热容
+**扩展的多节点热模型**：
+```
+T_die = T_ambient + θ_ja × P_total
+T_junction = T_die + θ_jc × P_local
+T_case = T_die + θ_cs × P_total
+```
 
-**动态热管理（DTM）**：
-- 温度监控：多点温度传感器
-- 预防措施：提前降频避免过热
-- 紧急措施：热节流（Thermal Throttling）
+其中：
+- θ_ja：结到环境热阻
+- θ_jc：结到封装热阻
+- θ_cs：封装到散热器热阻
+
+**动态热管理（DTM）技术栈**：
+
+1. **硬件层**：
+   - 分布式温度传感器（DTS）
+   - 热二极管阵列
+   - 功耗监控单元（PMU）
+
+2. **固件层**：
+   - 快速温度采样（1kHz+）
+   - 紧急响应逻辑
+   - 热保护机制
+
+3. **软件层**：
+   - 温度预测算法
+   - 负载均衡调度
+   - 用户体验优化
 
 **4. 持续性能优化**
 
 定义持续性能：
 $$Performance_{sustained} = \min_{t \in [0, T_{long}]} Performance(t)$$
 
-优化策略：
-- **功耗预算分配**：在温度限制内最大化性能
-- **计算迁移**：将负载从热点迁移到较冷区域
-- **间歇boost**：利用热容短时提高性能
+**热预算管理算法**：
+```python
+thermal_budget = max_temp - current_temp
+power_budget = thermal_budget / thermal_resistance
+allowed_freq = power_to_freq(power_budget)
+```
+
+**多级响应策略**：
+1. **Level 1** (T < T_target - 10°C)：全速运行
+2. **Level 2** (T_target - 10°C ≤ T < T_target)：轻微降频（-10%）
+3. **Level 3** (T_target ≤ T < T_critical)：显著降频（-30%）
+4. **Level 4** (T ≥ T_critical)：紧急节流（-50%或关闭）
+
+**5. 实际系统中的热设计**
+
+**移动设备**：
+- 被动散热（石墨片、热管）
+- 热容量有限（< 10J/K）
+- 峰值性能持续时间：10-30秒
+
+**笔记本电脑**：
+- 主动散热（风扇+热管）
+- 中等热容量（50-100J/K）
+- 动态功耗墙（15W → 45W boost）
+
+**服务器**：
+- 强制风冷或液冷
+- 大热容量但密度高
+- 注重TCO（包括冷却成本）
+
+**6. 热感知的推理优化**
+
+**时间交错执行**：
+```
+Heavy compute → Cool down → Memory intensive → Heavy compute
+```
+
+**空间分散策略**：
+- 将计算分散到芯片不同区域
+- 利用芯片间的热传导延迟
+- 避免持续激活同一区域
+
+**自适应批处理**：
+$$Batch_{size} = f(T_{current}, T_{target}, Deadline)$$
+
+当温度接近限制时，减小批大小以降低瞬时功耗。
 
 实践建议：
 - 设计时考虑95th percentile负载，not峰值
-- 实现多级热管理策略
-- 监控并记录热事件for优化
+- 实现多级热管理策略with hysteresis
+- 监控并记录热事件for长期优化
+- 考虑环境温度变化（夏季vs冬季）
+- 为用户提供性能/温度模式选择
 
 ## 21.4 边缘-云协同推理
 
