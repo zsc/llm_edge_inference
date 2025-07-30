@@ -6,38 +6,121 @@
 
 ### 26.1.1 可微分量化搜索
 
-传统量化方法通常采用固定的量化策略，而未来的量化技术将向着自适应和可学习的方向发展。可微分量化搜索（Differentiable Quantization Search, DQS）通过将量化位宽和量化参数纳入可学习范畴，实现端到端的优化。
+传统量化方法通常采用固定的量化策略，而未来的量化技术将向着自适应和可学习的方向发展。可微分量化搜索（Differentiable Quantization Search, DQS）通过将量化位宽和量化参数纳入可学习范畴，实现端到端的优化。这种方法的核心思想是将离散的量化决策转化为连续的优化问题，从而可以利用梯度下降等优化算法自动找到最优的量化配置。
+
+**量化函数的数学定义**
 
 对于权重 $W \in \mathbb{R}^{m \times n}$，可微分量化函数定义为：
 
 $$Q(W, \alpha, \beta) = \alpha \cdot \text{clip}\left(\text{round}\left(\frac{W}{\alpha}\right), -2^{\beta-1}, 2^{\beta-1}-1\right)$$
 
-其中 $\alpha$ 是尺度因子，$\beta$ 是位宽参数。通过引入Gumbel-Softmax技巧，可以使位宽选择过程可微：
+其中 $\alpha$ 是尺度因子，$\beta$ 是位宽参数。这个函数可以分解为三个步骤：
+1. **缩放**：$W_{\text{scaled}} = W/\alpha$，将权重映射到量化范围
+2. **取整**：$W_{\text{int}} = \text{round}(W_{\text{scaled}})$，转换为整数
+3. **裁剪与反缩放**：确保值在有效范围内并恢复原始尺度
+
+**Gumbel-Softmax位宽选择**
+
+通过引入Gumbel-Softmax技巧，可以使位宽选择过程可微：
 
 $$\beta = \sum_{b \in \{2,4,8\}} b \cdot \frac{\exp((g_b + \log \pi_b)/\tau)}{\sum_{b'} \exp((g_{b'} + \log \pi_{b'})/\tau)}$$
 
 其中 $g_b$ 是Gumbel噪声，$\pi_b$ 是位宽 $b$ 的先验概率，$\tau$ 是温度参数。
 
-**梯度估计与反向传播**：使用直通估计器（Straight-Through Estimator, STE）处理量化操作的梯度：
+Gumbel噪声的生成：$g_b = -\log(-\log(u_b))$，其中 $u_b \sim \text{Uniform}(0,1)$
+
+温度参数的作用：
+- 高温度（$\tau > 1$）：接近均匀分布，探索性强
+- 低温度（$\tau \to 0$）：接近one-hot分布，确定性强
+- 典型退火策略：$\tau_t = \max(\tau_{\min}, \tau_0 \cdot \exp(-\lambda t))$
+
+**梯度估计与反向传播**
+
+使用直通估计器（Straight-Through Estimator, STE）处理量化操作的梯度：
 
 $$\frac{\partial Q}{\partial W} \approx \mathbb{1}_{|W/\alpha| \leq 2^{\beta-1}-1}$$
+
+这个指示函数确保只有在量化范围内的权重才会接收梯度。实际实现中，常使用更平滑的梯度估计：
+
+$$\frac{\partial Q}{\partial W} \approx \begin{cases}
+1 & \text{if } |W/\alpha| < 2^{\beta-1}-1 \\
+0.1 & \text{if } 2^{\beta-1}-1 \leq |W/\alpha| < 2^{\beta-1} \\
+0 & \text{otherwise}
+\end{cases}$$
 
 对于尺度因子的学习，采用对数域参数化以保证数值稳定性：
 
 $$\alpha = \exp(s), \quad \frac{\partial \mathcal{L}}{\partial s} = \alpha \cdot \frac{\partial \mathcal{L}}{\partial \alpha}$$
 
-**多目标优化框架**：DQS的优化目标综合考虑任务损失和硬件效率：
+这种参数化的优势：
+- 保证 $\alpha > 0$
+- 梯度更新更稳定
+- 适应不同数量级的权重
 
-$$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{task}} + \lambda_1 \cdot \mathcal{L}_{\text{bit}} + \lambda_2 \cdot \mathcal{L}_{\text{reg}}$$
+**多目标优化框架**
+
+DQS的优化目标综合考虑任务损失和硬件效率：
+
+$$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{task}} + \lambda_1 \cdot \mathcal{L}_{\text{bit}} + \lambda_2 \cdot \mathcal{L}_{\text{reg}} + \lambda_3 \cdot \mathcal{L}_{\text{smooth}}$$
 
 其中：
 - $\mathcal{L}_{\text{bit}} = \sum_l \beta_l \cdot \text{FLOPs}_l / \sum_l \text{FLOPs}_l$ 是比特成本
 - $\mathcal{L}_{\text{reg}} = \sum_l \|W_l - Q(W_l, \alpha_l, \beta_l)\|^2$ 是量化误差正则项
+- $\mathcal{L}_{\text{smooth}} = \sum_l \sum_{i,j} (Q_{i,j} - Q_{i,j-1})^2$ 是平滑性正则项
 
-**渐进式训练策略**：
-1. 预热阶段：固定 $\beta = 8$，只学习 $\alpha$
-2. 搜索阶段：逐渐降低温度 $\tau$，$\tau_t = \tau_0 \cdot \exp(-\gamma t)$
-3. 精调阶段：固定搜索到的位宽，微调量化参数
+**自适应权重调整**
+
+根据训练进度动态调整各项损失的权重：
+$$\lambda_i(t) = \lambda_i^{\text{init}} \cdot \left(1 + \cos\left(\frac{\pi t}{T}\right)\right) / 2$$
+
+这种余弦退火策略使得训练初期更关注任务性能，后期更关注压缩效果。
+
+**渐进式训练策略**
+
+1. **预热阶段**（0-25% epochs）：
+   - 固定 $\beta = 8$，只学习 $\alpha$
+   - 目的：稳定训练，找到合适的量化尺度
+   - 学习率：$\eta_{\alpha} = 0.01 \cdot \eta_{\text{base}}$
+
+2. **搜索阶段**（25-75% epochs）：
+   - 逐渐降低温度 $\tau$，$\tau_t = \tau_0 \cdot \exp(-\gamma t)$
+   - 同时优化位宽和尺度因子
+   - 引入硬件感知的约束
+
+3. **精调阶段**（75-100% epochs）：
+   - 固定搜索到的位宽，微调量化参数
+   - 使用知识蒸馏进一步提升性能
+   - 降低学习率：$\eta_t = \eta_0 \cdot 0.1$
+
+**硬件感知的位宽分配**
+
+考虑实际硬件的计算特性，修正比特成本计算：
+
+$$\mathcal{L}_{\text{bit}}^{\text{hw}} = \sum_l \frac{\text{Cycles}_l(\beta_l)}{\text{Cycles}_l(8)} \cdot \frac{\text{FLOPs}_l}{\sum_l \text{FLOPs}_l}$$
+
+其中 $\text{Cycles}_l(\beta_l)$ 是在特定硬件上执行第 $l$ 层所需的时钟周期数，它依赖于：
+- SIMD指令集支持（如ARM NEON的INT8/INT4指令）
+- 内存对齐要求
+- 缓存行为
+
+**层间依赖性建模**
+
+相邻层之间的量化配置会相互影响，需要考虑信息流的连续性：
+
+$$\mathcal{L}_{\text{dependency}} = \sum_{l=1}^{L-1} \rho_l \cdot \max(0, |\beta_l - \beta_{l+1}| - \delta)^2$$
+
+其中 $\rho_l$ 是层 $l$ 的重要性权重，可以通过梯度幅值或Fisher信息估计：
+
+$$\rho_l = \frac{\|\nabla_{W_l} \mathcal{L}\|_F}{\sum_k \|\nabla_{W_k} \mathcal{L}\|_F}$$
+
+**实验验证的最佳实践**
+
+基于大量实验，DQS的最佳配置包括：
+- 初始温度：$\tau_0 = 5.0$
+- 温度衰减率：$\gamma = 0.005$
+- 位宽候选集：$\{2, 4, 8\}$ 或 $\{4, 8, 16\}$
+- 批次大小：至少128，保证梯度估计稳定
+- 优化器：AdamW with $\beta_1 = 0.9, \beta_2 = 0.999$
 
 ### 26.1.2 向量量化与码本学习
 
