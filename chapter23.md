@@ -24,7 +24,8 @@
 - 语言生成：~14 GFLOPs/token（假设序列长度1024）
 - 总计算量随生成长度线性增长
 
-详细计算分析：
+**深度计算分析**：
+
 对于224×224的输入图像，ViT-L/14的计算可分解为：
 - Patch Embedding: 3×16×16×1024 ≈ 0.8M FLOPs
 - Position Encoding: 可忽略（预计算）
@@ -33,11 +34,36 @@
 - Layer Norm: 24×2×197×1024 ≈ 10M FLOPs
 总计约505G FLOPs
 
+更细粒度的注意力计算分解：
+```
+每层Self-Attention计算量：
+- QKV投影: 3 × seq_len × d_model × d_model = 3 × 197 × 1024 × 1024 ≈ 620M FLOPs
+- 注意力分数: num_heads × seq_len × seq_len × d_head = 16 × 197 × 197 × 64 ≈ 40M FLOPs
+- Softmax: num_heads × seq_len × seq_len ≈ 0.6M FLOPs (可忽略)
+- 加权求和: num_heads × seq_len × seq_len × d_head = 40M FLOPs
+- 输出投影: seq_len × d_model × d_model = 197 × 1024 × 1024 ≈ 207M FLOPs
+单层总计: ~907M FLOPs
+```
+
 语言模型的计算分解（以7B模型为例）：
 - Embedding查表：可忽略
 - Self-Attention: L×2×n×d² ≈ L×2×n×4096² FLOPs
 - FFN: L×2×n×d×4d ≈ L×8×n×4096² FLOPs
 其中L是层数（如32），n是序列长度
+
+**计算密度分析**：
+```
+视觉编码器计算密度 = FLOPs / 参数量
+ViT-L: 505G FLOPs / 307M params ≈ 1645 FLOPs/param
+
+语言模型计算密度 = FLOPs / 参数量  
+7B LLM: 14G FLOPs / 7B params ≈ 2 FLOPs/param (per token)
+
+观察：视觉编码器的计算密度显著高于语言模型，这是因为：
+1. 视觉编码器处理固定大小的2D空间信息
+2. 全局注意力导致O(n²)复杂度
+3. 每个patch都需要与所有其他patch交互
+```
 
 **Flamingo-style架构**（如Flamingo、IDEFICS）：
 - 视觉编码器：约20-30%的计算量
@@ -46,11 +72,49 @@
 
 关键观察：Perceiver Resampler通过降低视觉token数量（如从256降至64），显著减少了后续cross-attention的计算量。
 
-Perceiver的计算量分析：
-- Cross-attention: n_queries × n_visual × d = 64 × 256 × 1024 ≈ 17M FLOPs
-- Self-attention: 6层 × 2 × 64 × 1024² ≈ 0.8G FLOPs
-- FFN: 6层 × 2 × 64 × 1024 × 4096 ≈ 3.2G FLOPs
+**Perceiver的详细计算量分析**：
+```
+输入：256个视觉tokens (来自Vision Encoder)
+输出：64个压缩tokens (送入LLM)
+
+每层Perceiver Block计算：
+- Cross-attention (queries attend to visual):
+  - Q投影: 64 × 1024 × 1024 = 67M FLOPs
+  - K,V投影: 2 × 256 × 1024 × 1024 = 537M FLOPs
+  - 注意力计算: 64 × 256 × 1024 = 17M FLOPs
+  - 输出投影: 64 × 1024 × 1024 = 67M FLOPs
+  小计: ~688M FLOPs
+
+- Self-attention (queries attend to queries):
+  - QKV投影: 3 × 64 × 1024 × 1024 = 201M FLOPs
+  - 注意力计算: 64 × 64 × 1024 = 4M FLOPs
+  - 输出投影: 64 × 1024 × 1024 = 67M FLOPs
+  小计: ~272M FLOPs
+
+- FFN:
+  - 扩展: 64 × 1024 × 4096 = 268M FLOPs
+  - 压缩: 64 × 4096 × 1024 = 268M FLOPs
+  小计: ~536M FLOPs
+
+单层总计: ~1.5G FLOPs
+6层总计: ~9G FLOPs
+```
+
 相比直接使用256个视觉token，计算量减少约75%
+
+**计算量对比分析**：
+```
+直接使用256 tokens在32层LLM中：
+- 每层cross-attention: 2048 × 256 × 4096 × 2 ≈ 4.3G FLOPs
+- 32层总计: ~137.6G FLOPs
+
+使用Perceiver压缩到64 tokens：
+- Perceiver: 9G FLOPs
+- LLM cross-attention: 2048 × 64 × 4096 × 2 × 32 ≈ 34.4G FLOPs
+- 总计: ~43.4G FLOPs
+
+节省计算量: (137.6 - 43.4) / 137.6 ≈ 68.5%
+```
 
 **BLIP-style架构**（如BLIP-2、InstructBLIP）：
 - 冻结的视觉编码器：约15-25%的计算量
@@ -59,24 +123,73 @@ Perceiver的计算量分析：
 
 Q-Former的设计巧妙地平衡了性能和效率，通过少量可学习查询（如32个）来提取视觉信息。
 
-Q-Former计算细节：
+**Q-Former计算细节与优化分析**：
+```
+架构参数：
 - 查询数量：32个可学习queries
-- 交互层数：通常12层
-- 每层包含：
-  - Self-attention (queries): 32×32×768 ≈ 0.8M FLOPs
-  - Cross-attention (query-image): 32×257×768 ≈ 6.3M FLOPs
-  - FFN: 2×32×768×3072 ≈ 151M FLOPs
-总计约1.9G FLOPs，仅占整体计算的很小部分
+- 隐藏维度：768 (BERT-base规模)
+- 层数：12层transformer
+- 图像tokens：257 (16×16 + 1 CLS token)
+
+每层计算分解：
+1. 双向自注意力 (queries互相交互):
+   - QKV投影: 3 × 32 × 768 × 768 = 56.6M FLOPs
+   - 注意力分数: 12 heads × 32 × 32 × 64 = 0.8M FLOPs
+   - 输出投影: 32 × 768 × 768 = 18.9M FLOPs
+   小计: ~76.3M FLOPs
+
+2. 交叉注意力 (queries查看图像):
+   - Q投影: 32 × 768 × 768 = 18.9M FLOPs
+   - KV投影: 2 × 257 × 768 × 768 = 303M FLOPs
+   - 注意力计算: 32 × 257 × 768 = 6.3M FLOPs
+   - 输出投影: 32 × 768 × 768 = 18.9M FLOPs
+   小计: ~347.1M FLOPs
+
+3. FFN:
+   - 第一层: 32 × 768 × 3072 = 75.5M FLOPs
+   - 激活函数: ~0.8M FLOPs
+   - 第二层: 32 × 3072 × 768 = 75.5M FLOPs
+   小计: ~151.8M FLOPs
+
+单层总计: ~575.2M FLOPs
+12层总计: ~6.9G FLOPs
+```
+
+Q-Former的效率优势：
+1. 固定32个queries，与图像分辨率解耦
+2. 参数共享：查询可跨不同图像重用
+3. 计算量仅占总体5-10%，但提供关键的模态桥接
 
 **LLaVA-style架构**（如LLaVA、LLaVA-1.5）：
 - 视觉编码器：固定计算量，与图像大小相关
 - 简单投影层：< 1%的计算量
 - 语言模型：> 95%的计算量（对于长序列）
 
-LLaVA的极简设计使其特别适合边缘部署：
-- 仅需一个线性投影层：336×336×3 → 576×1024 → 576×4096
-- 投影计算：576×1024×4096 ≈ 2.4G FLOPs
-- 相比语言模型的数百G FLOPs，几乎可忽略
+**LLaVA详细分析**：
+```
+视觉处理流程：
+1. CLIP ViT-L/14编码器:
+   - 输入: 336×336 RGB图像
+   - Patches: 24×24 = 576个
+   - 输出: 576×1024维特征
+
+2. 线性投影层:
+   - 输入: 576×1024 (视觉特征)
+   - 权重: 1024×4096 (映射到LLM维度)
+   - 计算: 576×1024×4096 = 2.4G FLOPs
+   - 参数量: 4.2M (仅占总参数0.06%)
+
+3. 特征注入到LLM:
+   - 视觉tokens作为prefix
+   - 无需额外cross-attention
+   - 直接复用LLM的self-attention
+```
+
+LLaVA的极简设计优势：
+1. 训练效率：仅需训练投影层
+2. 推理效率：无额外attention开销
+3. 内存效率：不需要额外的交叉注意力层
+4. 硬件友好：纯矩阵乘法，易于优化
 
 ### 23.1.2 计算瓶颈识别
 
@@ -88,27 +201,95 @@ LLaVA的极简设计使其特别适合边缘部署：
 - ViT的计算量增加4倍（patch数量增加4倍）
 - 内存占用增加约3.5倍（考虑激活值存储）
 
-具体数值分析（以ViT-L为例）：
-- 224×224: 197个patches，505G FLOPs
-- 448×448: 784个patches，2020G FLOPs
-- 896×896: 3136个patches，8080G FLOPs
+**详细数值分析（以ViT-L为例）**：
+```
+分辨率影响分析：
+224×224 (14×14 patches):
+- Patches: 197 (196 + 1 CLS)
+- 计算量: 505G FLOPs
+- 激活内存: 77MB (FP32)
 
-内存占用分析：
-- 激活值存储：batch_size × num_patches × hidden_dim × num_layers
-- 224×224: 1×197×1024×24×4 bytes ≈ 77MB
-- 448×448: 1×784×1024×24×4 bytes ≈ 307MB
-- KV cache额外开销：2×num_layers×num_patches×hidden_dim
+448×448 (28×28 patches):
+- Patches: 785 (784 + 1 CLS)
+- 计算量: 2,020G FLOPs
+- 激活内存: 307MB (FP32)
 
-优化策略：
-- 动态分辨率调整：根据图像内容复杂度选择合适分辨率
-- 局部高分辨率处理：仅对感兴趣区域使用高分辨率
-- 多尺度特征融合：不同分辨率特征hierarchical处理
+896×896 (56×56 patches):
+- Patches: 3,137 (3136 + 1 CLS)
+- 计算量: 8,080G FLOPs
+- 激活内存: 1.2GB (FP32)
+
+计算复杂度增长：O(H²W²)
+内存复杂度增长：O(HW)
+```
+
+**内存占用详细分析**：
+```
+激活值存储需求：
+1. 输入特征图: batch × patches × dim
+   - 224×224: 1 × 197 × 1024 × 4 = 0.8MB
+   - 448×448: 1 × 785 × 1024 × 4 = 3.2MB
+
+2. 注意力矩阵: layers × heads × patches × patches
+   - 224×224: 24 × 16 × 197 × 197 × 4 = 59MB
+   - 448×448: 24 × 16 × 785 × 785 × 4 = 945MB
+
+3. 中间激活: layers × patches × dim × expansion
+   - 224×224: 24 × 197 × 1024 × 4 × 4 = 77MB
+   - 448×448: 24 × 785 × 1024 × 4 × 4 = 307MB
+
+总内存需求（峰值）：
+- 224×224: ~137MB
+- 448×448: ~1,255MB
+- 增长比例: 9.2倍
+```
+
+**分层优化策略**：
+
+1. **动态分辨率调整**：
+```
+图像复杂度评估：
+- 计算图像梯度: grad = |∇I|
+- 信息密度: density = entropy(grad) / (H×W)
+- 选择分辨率:
+  if density < 0.1: use 224×224
+  elif density < 0.3: use 336×336
+  else: use 448×448
+```
+
+2. **局部高分辨率处理（Patch-wise Attention）**：
+```
+将图像分为重要区域和背景：
+- 重要区域: 448×448分辨率，细粒度patches
+- 背景区域: 224×224分辨率，粗粒度patches
+- 混合处理: 减少50-70%计算量
+```
+
+3. **多尺度特征融合**：
+```
+金字塔处理：
+Level 1: 224×224 → 49 patches (全局语义)
+Level 2: 448×448 → 196 patches (中层细节)
+Level 3: 896×896 → 784 patches (局部细节)
+特征融合: Fused = α₁L₁ + α₂L₂ + α₃L₃
+```
 
 **窗口注意力优化**：
-将全局注意力改为窗口注意力可显著降低计算量：
-- 全局：O(n²d)，其中n是patch数
-- 窗口（w×w）：O(nw²d)，计算量降低为原来的w²/n
-- 对于448×448图像，使用7×7窗口，计算量降低16倍
+```
+计算复杂度对比：
+全局注意力: O(n²d) = O((HW/P²)² × d)
+窗口注意力: O(nw²d) = O((HW/P²) × w² × d)
+
+实例分析（448×448，patch=16）：
+- 全局: 785² × 1024 = 632M ops per head
+- 窗口(7×7): 785 × 49 × 1024 = 39M ops per head
+- 加速比: 16.2倍
+
+实现细节：
+1. 窗口划分: 将patches组织为不重叠的7×7窗口
+2. 窗口内注意力: 每个窗口独立计算
+3. 窗口间交互: 每2层shift窗口实现全局感受野
+```
 
 **2. 长序列cross-attention**
 
