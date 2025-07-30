@@ -814,3 +814,742 @@ $$\epsilon_t = \epsilon_{final} + (\epsilon_{init} - \epsilon_{final}) \cdot e^{
 - 质量优先：选择精度最高且满足约束的架构
 
 通过可视化Pareto前沿和交互式选择工具，帮助用户做出明智决策。
+
+### 25.3.5 代理模型与贝叶斯优化
+
+在NAS中直接评估每个架构的真实性能代价高昂，代理模型（Surrogate Model）提供了一种高效的性能预测方法。贝叶斯优化则利用这些预测来智能地探索搜索空间。
+
+**1. 性能预测器设计**
+
+基于架构特征的预测器：
+
+编码架构为特征向量：
+$$\mathbf{x} = [\text{depth}, \text{width}, \text{operators}, \text{connections}]$$
+
+常用的预测模型：
+- 高斯过程（GP）：提供不确定性估计
+- 随机森林：处理离散特征
+- 图神经网络：捕捉拓扑结构信息
+
+训练数据收集策略：
+- 随机采样：无偏但可能低效
+- 主动学习：选择不确定性最大的架构
+- 迁移学习：利用相关任务的数据
+
+**2. 高斯过程回归**
+
+GP建模架构性能：
+$$f(\mathbf{x}) \sim \mathcal{GP}(m(\mathbf{x}), k(\mathbf{x}, \mathbf{x}'))$$
+
+均值函数：
+$$m(\mathbf{x}) = \mathbb{E}[f(\mathbf{x})]$$
+
+协方差函数（核函数）：
+$$k(\mathbf{x}, \mathbf{x}') = \sigma_f^2 \exp\left(-\frac{||\mathbf{x} - \mathbf{x}'||^2}{2l^2}\right)$$
+
+后验预测：
+$$\mu(\mathbf{x}_*) = \mathbf{k}_*^T (\mathbf{K} + \sigma_n^2 \mathbf{I})^{-1} \mathbf{y}$$
+$$\sigma^2(\mathbf{x}_*) = k(\mathbf{x}_*, \mathbf{x}_*) - \mathbf{k}_*^T (\mathbf{K} + \sigma_n^2 \mathbf{I})^{-1} \mathbf{k}_*$$
+
+**3. 贝叶斯优化框架**
+
+获取函数（Acquisition Function）指导搜索：
+
+期望改进（EI）：
+$$\text{EI}(\mathbf{x}) = \mathbb{E}[\max(f(\mathbf{x}) - f^+, 0)]$$
+
+其中$f^+$是当前最优值。
+
+闭式解：
+$$\text{EI}(\mathbf{x}) = \sigma(\mathbf{x})[\gamma \Phi(\gamma) + \phi(\gamma)]$$
+
+其中：
+- $\gamma = \frac{\mu(\mathbf{x}) - f^+}{\sigma(\mathbf{x})}$
+- $\Phi$和$\phi$分别是标准正态分布的CDF和PDF
+
+上置信界（UCB）：
+$$\text{UCB}(\mathbf{x}) = \mu(\mathbf{x}) + \beta \sigma(\mathbf{x})$$
+
+$\beta$控制探索与利用的平衡。
+
+**4. 多保真度优化**
+
+利用不同精度的评估降低成本：
+
+保真度级别：
+- 低保真度：少量epoch训练、小数据集
+- 中保真度：中等训练、代理任务
+- 高保真度：完整训练、真实任务
+
+多保真度GP：
+$$f(\mathbf{x}, z) \sim \mathcal{GP}(m(\mathbf{x}, z), k((\mathbf{x}, z), (\mathbf{x}', z')))$$
+
+其中$z$表示保真度级别。
+
+成本感知获取函数：
+$$\text{EI/Cost}(\mathbf{x}, z) = \frac{\text{EI}(\mathbf{x}, z)}{C(z)^\alpha}$$
+
+### 25.3.6 进化策略的现代改进
+
+**1. 正则化进化（Regularized Evolution）**
+
+基本思想：维护固定大小的种群，定期淘汰最老的个体。
+
+算法流程：
+```
+1. 初始化种群P（大小S）
+2. While not converged:
+   a. 采样父代个体
+   b. 应用变异操作
+   c. 评估新个体
+   d. 加入种群，移除最老个体
+```
+
+年龄正则化的优势：
+- 避免早期优秀个体主导
+- 保持种群多样性
+- 自然的探索-利用平衡
+
+**2. 锦标赛选择改进**
+
+多目标锦标赛选择：
+```
+1. 随机选择k个个体
+2. 按Pareto支配关系排序
+3. 若存在非支配个体，随机选择一个
+4. 否则，选择拥挤度最大的
+```
+
+自适应锦标赛大小：
+$$k_t = k_{min} + (k_{max} - k_{min}) \cdot (1 - e^{-t/\tau})$$
+
+早期使用小锦标赛促进探索，后期增大以加强选择压力。
+
+**3. 变异算子设计**
+
+架构感知的变异策略：
+- 操作变异：随机改变某层的操作类型
+- 连接变异：增加或删除跳跃连接
+- 深度变异：插入或删除整层
+- 宽度变异：改变通道数
+
+变异率自适应：
+$$p_m = p_{m,0} \cdot \exp(-\lambda \cdot \text{fitness\_variance})$$
+
+当种群收敛（fitness方差小）时增加变异率。
+
+**4. 协同进化策略**
+
+将架构分解为多个子组件分别进化：
+
+子种群设置：
+- 种群1：编码器架构
+- 种群2：解码器架构
+- 种群3：连接模式
+
+适应度共享：
+$$f_{shared}(i) = \frac{f(i)}{\sum_{j} sh(d_{ij})}$$
+
+其中共享函数：
+$$sh(d) = \begin{cases}
+1 - d/\sigma_{share} & \text{if } d < \sigma_{share} \\
+0 & \text{otherwise}
+\end{cases}$$
+
+### 25.3.7 实时搜索与在线适应
+
+**1. 增量式架构搜索**
+
+动态调整已部署模型：
+
+渐进式生长：
+```
+1. 从小模型开始
+2. 监控资源使用和性能
+3. 当有额外资源时，扩展架构
+4. 在线微调新增部分
+```
+
+收缩策略：
+- 识别低贡献度的组件
+- 逐步减少其容量
+- 监控性能下降
+- 必要时恢复
+
+**2. 上下文感知搜索**
+
+根据运行时条件调整：
+
+多模式架构：
+$$\mathcal{A} = \{A_{low}, A_{med}, A_{high}\}$$
+
+模式选择策略：
+$$A_t = \begin{cases}
+A_{high} & \text{if } P_{battery} > 50\% \land L_{cpu} < 30\% \\
+A_{med} & \text{if } 20\% < P_{battery} \leq 50\% \\
+A_{low} & \text{otherwise}
+\end{cases}$$
+
+平滑切换机制：
+- 共享骨干网络
+- 仅切换可变部分
+- 使用知识蒸馏保持一致性
+
+**3. 联邦架构搜索**
+
+分布式设备上的协同搜索：
+
+本地搜索：
+- 每个设备在本地数据上搜索
+- 考虑设备特定的约束
+- 定期上传架构和性能
+
+全局聚合：
+$$A_{global} = \argmax_A \sum_{i} w_i \cdot \text{Score}_i(A)$$
+
+其中$w_i$反映设备i的重要性（数据量、可靠性等）。
+
+隐私保护机制：
+- 仅分享架构参数，不分享数据
+- 使用差分隐私添加噪声
+- 安全聚合协议
+
+### 25.3.8 自动化超参数优化
+
+NAS过程本身有许多超参数需要调整，自动化这一过程可以提高搜索效率。
+
+**1. 搜索超参数的优化**
+
+关键超参数：
+- 学习率调度：$\eta_t = \eta_0 \cdot \cos(\frac{\pi t}{T})$
+- 权重衰减：$\lambda \in [10^{-5}, 10^{-2}]$
+- 架构参数温度：$\tau \in [0.1, 1.0]$
+- 正则化系数：硬件感知项的权重
+
+嵌套优化：
+$$\begin{aligned}
+\min_{\Lambda} & \quad \mathcal{L}_{val}(\alpha^*(\Lambda), w^*(\alpha^*, \Lambda)) \\
+\text{s.t.} & \quad \alpha^* = \argmin_\alpha \mathcal{L}_{search}(\alpha, w^*; \Lambda) \\
+& \quad w^* = \argmin_w \mathcal{L}_{train}(w, \alpha; \Lambda)
+\end{aligned}$$
+
+**2. 自适应搜索策略**
+
+根据搜索进展动态调整：
+
+收敛检测：
+$$\text{Converged} = \frac{||\mathcal{P}_t - \mathcal{P}_{t-\Delta t}||}{||\mathcal{P}_t||} < \epsilon$$
+
+其中$\mathcal{P}_t$是时刻t的Pareto前沿。
+
+策略切换：
+- 早期：重视多样性，大变异率
+- 中期：平衡探索与利用
+- 后期：局部精细搜索
+
+**3. 元学习加速**
+
+利用历史搜索经验：
+
+任务相似度：
+$$\text{Sim}(T_i, T_j) = \exp(-||\phi(T_i) - \phi(T_j)||^2)$$
+
+其中$\phi$提取任务特征（数据集统计、硬件规格等）。
+
+初始化策略：
+$$\theta_0 = \sum_{i} \text{Sim}(T_{new}, T_i) \cdot \theta_i^*$$
+
+使用相似任务的最优解加权初始化新任务。
+
+**4. 搜索空间自动设计**
+
+基于性能分析自动构建搜索空间：
+
+操作重要性评分：
+$$I(op) = \mathbb{E}_{\alpha \in \mathcal{A}}[\text{Perf}(\alpha) | op \in \alpha] - \mathbb{E}_{\alpha \in \mathcal{A}}[\text{Perf}(\alpha)]$$
+
+自动剪枝低价值操作：
+- 移除重要性分数低的操作
+- 保留互补的操作组合
+- 根据硬件特性调整
+
+层次化搜索空间：
+1. 宏观搜索：整体架构模式
+2. 微观搜索：块内部结构
+3. 精细搜索：具体超参数
+
+通过分阶段搜索降低复杂度。
+
+## 25.4 自动化压缩流程
+
+将NAS与其他压缩技术（量化、剪枝、知识蒸馏）结合，可以构建端到端的自动化模型压缩流程。这种集成方法能够充分发挥各种技术的优势，获得更高的压缩率和更好的性能。
+
+### 25.4.1 联合优化框架
+
+**1. 统一的优化目标**
+
+综合考虑架构、量化、剪枝的联合优化：
+
+$$\min_{\alpha, q, m} \mathcal{L}_{task}(\alpha, q, m) + \lambda_1 \cdot \text{Size}(\alpha, q, m) + \lambda_2 \cdot \text{Latency}(\alpha, q, m)$$
+
+其中：
+- $\alpha$：架构参数
+- $q$：量化配置（位宽分配）
+- $m$：剪枝掩码
+
+模型大小计算：
+$$\text{Size} = \sum_{l} \frac{b_l \cdot c_{in,l} \cdot c_{out,l} \cdot k_l^2 \cdot (1-s_l)}{8 \times 1024^2} \text{ MB}$$
+
+其中$b_l$是层$l$的位宽，$s_l$是稀疏度。
+
+**2. 交替优化策略**
+
+由于联合优化空间巨大，通常采用交替优化：
+
+```
+1. 固定q, m，优化架构α
+2. 固定α, m，优化量化配置q
+3. 固定α, q，优化剪枝掩码m
+4. 重复直到收敛
+```
+
+每个子问题的求解：
+- 架构优化：使用NAS方法（DARTS、演化等）
+- 量化优化：基于敏感度分析的位宽分配
+- 剪枝优化：重要性评分 + 结构化约束
+
+**3. 端到端可微分框架**
+
+将所有压缩技术统一到可微分框架中：
+
+可微分量化：
+$$\tilde{w} = s \cdot \text{round}(\frac{w}{s})$$
+
+使用直通估计器（STE）进行梯度回传：
+$$\frac{\partial \mathcal{L}}{\partial w} = \frac{\partial \mathcal{L}}{\partial \tilde{w}}$$
+
+可微分剪枝：
+$$\tilde{w} = w \odot \sigma(\alpha_m \cdot g)$$
+
+其中$g$是重要性分数，$\alpha_m$控制剪枝程度。
+
+### 25.4.2 硬件感知的压缩策略
+
+**1. 平台特定的压缩配置**
+
+不同硬件对压缩技术的支持差异：
+
+ARM CPU优化：
+- INT8量化：NEON指令集原生支持
+- 结构化剪枝：保持缓存友好的访问模式
+- 通道剪枝粒度：4的倍数（向量化考虑）
+
+GPU优化：
+- 2:4稀疏：Ampere架构的硬件加速
+- FP16/INT8混合精度：Tensor Core利用
+- 块稀疏模式：匹配warp执行模型
+
+NPU/DSP优化：
+- 固定点量化：通常仅支持INT8/INT16
+- 规则稀疏模式：硬件加速单元要求
+- 层融合：减少片外内存访问
+
+**2. 延迟感知的压缩决策**
+
+理论压缩率不等于实际加速比：
+
+有效压缩率：
+$$\text{Effective Ratio} = \frac{\text{Original Latency}}{\text{Compressed Latency}}$$
+
+延迟预测模型：
+$$T_{compressed} = T_{compute} \cdot (1 - s) \cdot \frac{b_{compressed}}{b_{original}} + T_{overhead}$$
+
+其中$T_{overhead}$包含解压缩、格式转换等开销。
+
+**3. 内存层次感知**
+
+考虑不同存储层次的带宽和容量：
+
+分层存储策略：
+- L1缓存：存储最频繁访问的权重
+- L2缓存：存储当前层的完整权重
+- 主内存：存储整个模型
+
+压缩决策影响：
+```
+if (compressed_size < L2_cache_size):
+    # 整层可以缓存，激进压缩
+    quantization_bits = 4
+else:
+    # 需要频繁内存访问，保守压缩
+    quantization_bits = 8
+```
+
+### 25.4.3 渐进式压缩流水线
+
+**1. 多阶段压缩策略**
+
+逐步增加压缩强度，保持模型质量：
+
+阶段1：架构搜索
+- 寻找高效的基础架构
+- 不考虑量化和剪枝
+- 优化FLOPs和参数量
+
+阶段2：混合精度量化
+- 基于敏感度分析分配位宽
+- 保持关键层的高精度
+- 量化感知训练
+
+阶段3：结构化剪枝
+- 识别冗余通道/层
+- 保持硬件友好的结构
+- 微调恢复性能
+
+阶段4：联合优化
+- 同时调整所有压缩参数
+- 精细化调整
+- 最终部署准备
+
+**2. 知识蒸馏辅助**
+
+使用教师模型指导压缩过程：
+
+多教师蒸馏：
+$$\mathcal{L}_{KD} = \sum_{i} \alpha_i \cdot KL(p_{student} || p_{teacher_i})$$
+
+其中不同教师代表不同压缩阶段的模型。
+
+特征对齐：
+$$\mathcal{L}_{feature} = \sum_{l} \beta_l \cdot ||f_l^{student} - \phi_l(f_l^{teacher})||^2$$
+
+$\phi_l$是特征变换函数，处理维度不匹配。
+
+**3. 自适应压缩强度**
+
+根据任务难度动态调整：
+
+任务复杂度估计：
+- 类别数量
+- 数据集大小
+- 类间相似度
+- 噪声水平
+
+压缩强度映射：
+$$\text{Compression Ratio} = f(\text{Task Complexity}, \text{Hardware Constraints})$$
+
+简单任务可以更激进地压缩，复杂任务需要保守。
+
+### 25.4.4 实例：视觉Transformer的自动压缩
+
+**1. ViT特定的压缩挑战**
+
+Vision Transformer的独特结构带来新的压缩机会：
+
+Token剪枝：
+- 识别不重要的图像patch
+- 动态减少序列长度
+- 保持关键区域的分辨率
+
+注意力头剪枝：
+$$\text{Importance}_h = \frac{1}{N} \sum_{n=1}^{N} ||\text{Attention}_h^{(n)}||_F$$
+
+剪除重要性低的注意力头。
+
+层跳跃（Layer Skipping）：
+- 浅层用于简单样本
+- 深层用于复杂样本
+- 动态路由机制
+
+**2. 分辨率自适应**
+
+根据内容复杂度调整输入分辨率：
+
+复杂度评分：
+$$C_{img} = \text{Entropy}(img) + \lambda \cdot \text{EdgeDensity}(img)$$
+
+分辨率选择：
+$$r = \begin{cases}
+224 \times 224 & \text{if } C_{img} > \tau_{high} \\
+160 \times 160 & \text{if } \tau_{low} < C_{img} \leq \tau_{high} \\
+112 \times 112 & \text{otherwise}
+\end{cases}$$
+
+**3. 混合专家（MoE）压缩**
+
+将大模型压缩为多个专家的混合：
+
+专家分配：
+$$p(e|x) = \text{softmax}(W_g \cdot x)$$
+
+稀疏激活：
+- 每个样本只激活k个专家
+- 降低计算成本
+- 保持模型容量
+
+负载均衡损失：
+$$\mathcal{L}_{balance} = \sum_{e} \text{Var}(\text{Load}_e)$$
+
+确保专家负载均匀，避免某些专家过度使用。
+
+### 25.4.5 压缩质量评估与验证
+
+**1. 多维度评估指标**
+
+综合评估压缩效果：
+
+压缩率指标：
+- 模型大小压缩比：$\frac{\text{Original Size}}{\text{Compressed Size}}$
+- FLOPs减少率：$1 - \frac{\text{Compressed FLOPs}}{\text{Original FLOPs}}$
+- 内存占用减少：包括权重和激活
+
+性能保持率：
+$$\text{Performance Retention} = \frac{\text{Compressed Accuracy}}{\text{Original Accuracy}} \times 100\%$$
+
+硬件效率提升：
+- 实测推理延迟减少
+- 能耗降低百分比
+- 吞吐量提升倍数
+
+**2. 鲁棒性验证**
+
+压缩模型的鲁棒性测试：
+
+分布偏移测试：
+- 不同光照条件
+- 各种噪声级别
+- 对抗样本攻击
+
+量化误差累积分析：
+$$\epsilon_{total} = \sum_{l=1}^{L} \epsilon_l \cdot \prod_{j=l+1}^{L} ||W_j||$$
+
+确保误差不会在深层网络中爆炸。
+
+**3. 部署前验证**
+
+实际部署环境测试：
+
+边缘设备测试矩阵：
+```
+设备类型 | 批大小 | 延迟要求 | 通过率
+---------|--------|----------|--------
+手机     | 1      | <50ms    | 98%
+平板     | 4      | <100ms   | 95%
+嵌入式   | 1      | <200ms   | 99%
+```
+
+长时间运行稳定性：
+- 内存泄漏检查
+- 温度监控
+- 功耗一致性
+
+### 25.4.6 工具链集成与自动化
+
+**1. 压缩工作流编排**
+
+使用配置文件定义压缩流程：
+
+```yaml
+compression_pipeline:
+  - stage: nas
+    config:
+      search_space: mobilenet_v3
+      target_latency: 50ms
+      hardware: snapdragon_865
+  
+  - stage: quantization
+    config:
+      method: mixed_precision
+      calibration_samples: 1000
+      target_model_size: 10MB
+  
+  - stage: pruning
+    config:
+      sparsity: 0.5
+      structure: channel
+      granularity: 4
+  
+  - stage: optimization
+    config:
+      compiler: tensorrt
+      precision: int8
+      workspace_size: 1GB
+```
+
+**2. 持续集成/部署（CI/CD）**
+
+自动化测试和部署：
+
+触发条件：
+- 模型架构更新
+- 新硬件平台支持
+- 性能回归检测
+
+自动化流程：
+1. 拉取最新模型
+2. 执行压缩pipeline
+3. 运行性能基准测试
+4. 生成压缩报告
+5. 部署到边缘设备
+6. 收集真实世界反馈
+
+**3. 压缩策略版本管理**
+
+跟踪和管理不同的压缩配置：
+
+版本控制内容：
+- 搜索空间定义
+- 压缩超参数
+- 硬件配置文件
+- 评估指标历史
+
+A/B测试框架：
+- 并行部署多个压缩版本
+- 收集性能对比数据
+- 自动选择最优配置
+
+通过这种系统化的方法，可以将模型压缩从手工调优转变为自动化、可重复的工程流程。
+
+## 本章小结
+
+本章深入探讨了神经架构搜索（NAS）在边缘推理场景中的应用。我们学习了如何设计边缘友好的搜索空间，理解了硬件感知搜索的重要性，掌握了多目标优化的各种策略，并了解了如何将NAS与其他压缩技术结合形成自动化的模型优化流程。
+
+**关键要点：**
+
+1. **边缘导向的搜索空间设计**
+   - 优先选择硬件友好的操作（深度可分离卷积、组卷积等）
+   - 考虑量化和部署的约束
+   - 平衡模型容量与硬件限制
+
+2. **硬件感知的优化策略**
+   - 使用真实硬件延迟而非FLOPs作为优化目标
+   - 考虑内存层次结构和带宽限制
+   - 针对特定硬件特性（SIMD、GPU warp、NPU限制）定制搜索
+
+3. **多目标优化技术**
+   - Pareto前沿分析帮助理解精度-效率权衡
+   - 演化算法与梯度方法的结合
+   - 约束优化处理硬性限制
+
+4. **自动化压缩流程**
+   - NAS、量化、剪枝、蒸馏的联合优化
+   - 渐进式压缩保持模型质量
+   - 端到端的自动化工具链
+
+**核心公式回顾：**
+
+搜索空间的硬件成本建模：
+$$\text{Cost} = \alpha \cdot \text{FLOPs} + \beta \cdot \text{Memory Access} + \gamma \cdot \text{Latency}$$
+
+多目标优化的Pareto支配关系：
+$$x \prec y \iff \forall i: f_i(x) \leq f_i(y) \land \exists j: f_j(x) < f_j(y)$$
+
+贝叶斯优化的期望改进：
+$$\text{EI}(\mathbf{x}) = \sigma(\mathbf{x})[\gamma \Phi(\gamma) + \phi(\gamma)]$$
+
+联合压缩的优化目标：
+$$\min_{\alpha, q, m} \mathcal{L}_{task} + \lambda_1 \cdot \text{Size} + \lambda_2 \cdot \text{Latency}$$
+
+## 练习题
+
+### 基础题
+
+1. **搜索空间设计**
+   设计一个适用于ARM Cortex-A78 CPU的NAS搜索空间，要求：
+   - 基本操作包括3×3和5×5深度可分离卷积
+   - 考虑NEON向量化（128位宽）
+   - 通道数必须是4的倍数
+   
+   *提示：考虑哪些操作在ARM NEON上有高效实现*
+
+2. **延迟预测模型**
+   给定一个卷积操作：输入[1, 224, 224, 32]，卷积核3×3，输出通道64，步长1。
+   计算在以下条件下的理论延迟：
+   - 峰值计算能力：10 GFLOPS
+   - 内存带宽：25.6 GB/s
+   - 假设计算和内存访问不能重叠
+   
+   *提示：分别计算compute-bound和memory-bound时间，取最大值*
+
+3. **Pareto前沿分析**
+   给定5个架构的性能数据：
+   - A: 精度72%, 延迟15ms
+   - B: 精度70%, 延迟10ms
+   - C: 精度75%, 延迟25ms
+   - D: 精度71%, 延迟12ms
+   - E: 精度73%, 延迟20ms
+   
+   找出Pareto前沿上的架构。
+   
+   *提示：检查每个架构是否被其他架构支配*
+
+4. **量化感知的架构搜索**
+   设计一个搜索策略，同时优化架构和量化配置：
+   - 架构选择：层数∈{12, 16, 20}，宽度倍数∈{0.5, 0.75, 1.0}
+   - 量化选择：每层可选INT4或INT8
+   - 约束：模型大小<10MB，延迟<50ms
+   
+   *提示：考虑如何编码搜索空间和评估函数*
+
+### 挑战题
+
+5. **硬件特定优化**
+   针对Qualcomm Hexagon DSP设计NAS策略：
+   - HVX向量单元：1024位宽
+   - 支持的数据类型：INT8, INT16
+   - VLIW并行：4条向量指令
+   
+   设计搜索空间和优化策略，说明如何利用这些硬件特性。
+   
+   *提示：考虑向量化效率、数据对齐、指令级并行*
+
+6. **多保真度贝叶斯优化**
+   设计一个三级保真度的NAS系统：
+   - 低保真度：10个epoch，10%数据
+   - 中保真度：50个epoch，50%数据  
+   - 高保真度：200个epoch，100%数据
+   
+   如何设计获取函数来平衡探索成本和预测准确性？
+   
+   *提示：考虑成本加权的期望改进，以及何时切换保真度级别*
+
+7. **实时自适应架构**
+   设计一个可以根据运行时条件动态调整的模型架构：
+   - 检测电池电量、CPU负载、内存压力
+   - 支持3种运行模式：高性能、平衡、省电
+   - 模式切换延迟<100ms
+   
+   描述架构设计和切换机制。
+   
+   *提示：考虑共享backbone、可选分支、快速切换策略*
+
+8. **端到端压缩pipeline**
+   为一个100M参数的视觉Transformer设计完整的压缩流程，目标是部署到移动GPU上：
+   - 原始模型：ViT-Base, 86M参数，精度78%
+   - 目标：<10M参数，延迟<30ms，精度>72%
+   - 可用技术：NAS、混合精度量化、结构化剪枝、知识蒸馏
+   
+   设计压缩策略的执行顺序和每步的具体方法。
+   
+   *提示：考虑各技术的互补性、压缩顺序对最终效果的影响*
+
+<details>
+<summary>答案</summary>
+
+1. ARM搜索空间应包含：深度可分离卷积（3×3, 5×5），通道数{16, 32, 64, 128}，使用ReLU6激活，包含残差连接。
+
+2. 计算时间 = 51.4M FLOPs / 10 GFLOPS = 5.14ms；内存时间 = 7.4MB / 25.6GB/s = 0.29ms；理论延迟 = 5.14ms
+
+3. Pareto前沿：B（70%, 10ms）、A（72%, 15ms）、E（73%, 20ms）、C（75%, 25ms）
+
+4. 使用超网络方法，架构参数和量化参数联合训练，通过硬件感知的损失函数引导搜索
+
+5. 搜索空间应包含1024位对齐的张量操作，优先使用可向量化的操作，设计VLIW友好的并行模式
+
+6. 使用多保真度GP建模，获取函数考虑信息增益/成本比，当低保真度不确定性降低后切换到高保真度
+
+7. 采用超网络设计，共享前几层，后续层根据模式选择不同宽度，使用渐进式切换避免突变
+
+8. 顺序：1)NAS找到高效架构 2)知识蒸馏到目标架构 3)混合精度量化 4)通道剪枝微调 5)编译器优化
+
+</details>
