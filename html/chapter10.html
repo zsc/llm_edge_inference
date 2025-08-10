@@ -1,0 +1,1438 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <base href="./">
+    <title>第10章：稀疏化与参数共享</title>
+    <link rel="stylesheet" href="assets/style.css">
+    <link rel="stylesheet" href="assets/highlight.css">
+    <script src="assets/script.js" defer></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script>
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$']],
+                displayMath: [['$$', '$$']],
+                processEscapes: false,
+                packages: {'[+]': ['noerrors', 'ams']}
+            },
+            options: {
+                ignoreHtmlClass: 'tex2jax_ignore',
+                processHtmlClass: 'tex2jax_process'
+            },
+            loader: {
+                load: ['[tex]/noerrors', '[tex]/ams']
+            }
+        };
+    </script>
+</head>
+<body>
+    <div class="container">
+        <nav id="sidebar" class="sidebar">
+            <div class="sidebar-header">
+                <h3>目录</h3>
+                <button id="sidebar-toggle" class="sidebar-toggle">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </button>
+            </div>
+            <div class="sidebar-search">
+                <input type="text" id="sidebar-search-input" placeholder="搜索..." autocomplete="off">
+            </div>
+            <div id="tree-container">
+                <nav class="tree-nav" role="tree">
+                    <div class="tree-item " >
+                        <a href="index.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">边缘侧大语言模型推理加速：从算法到系统</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter1.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第1章：边缘推理的挑战与机遇</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter2.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第2章：性能分析与Roofline模型</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter3.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第3章：小语言模型(SLM)概览</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter4.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第4章：后训练量化（PTQ）</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter5.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第5章：Hessian引导的量化方法</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter6.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第6章：旋转量化与极低比特量化</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter7.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第7章：量化友好的模型设计</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter8.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第8章：量化工具链</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter9.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第9章：模型剪枝</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item active" >
+                        <a href="chapter10.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第10章：稀疏化与参数共享</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter11.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第11章：动态网络架构</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter12.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第12章：知识蒸馏</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter13.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第13章：注意力机制优化</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter14.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第14章：KV Cache管理与压缩</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter15.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第15章：解码加速技术</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter16.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第16章：首Token延迟(TTFT)优化</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter17.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第17章：内存管理与Offloading</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter18.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第18章：边缘推理框架</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter19.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第19章：深度学习编译器</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter20.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第20章：硬件特定优化</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter21.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第21章：跨平台部署实践</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter22.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第22章：视觉编码器优化</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter23.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第23章：多模态融合与平衡</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter24.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第24章：实时语音场景优化</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter25.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第25章：神经架构搜索（NAS）</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter26.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第26章：未来技术展望</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="CLAUDE.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">项目说明</span>
+                        </a>
+                    </div>
+                </nav>
+            </div>
+        </nav>
+        
+        <main class="content">
+            <article>
+                <h1 id="10">第10章：稀疏化与参数共享</h1>
+<p>稀疏化和参数共享是模型压缩领域的两大核心技术。稀疏化通过将部分权重置零来减少计算量，而参数共享则通过复用权重来降低模型参数量。本章将深入探讨结构化稀疏、模型合并等前沿技术，重点关注它们在边缘推理场景中的实际应用。我们将从数学原理出发，详细分析各种方法的设计思想、硬件适配性以及实际部署中的权衡。</p>
+<h2 id="101-24">10.1 2:4结构化稀疏</h2>
+<h3 id="1011">10.1.1 基本概念与定义</h3>
+<p>2:4结构化稀疏是NVIDIA在Ampere架构中引入的细粒度结构化剪枝技术。其核心约束是：在每4个连续权重中，必须有且仅有2个权重为零。</p>
+<p>对于权重矩阵 W ∈ ℝ^(m×n)，我们将其按行展开，每4个元素为一组：</p>
+<ul>
+<li>组 G_i = [w_{i,4j}, w_{i,4j+1}, w_{i,4j+2}, w_{i,4j+3}]</li>
+<li>约束：||G_i||_0 = 2，即每组恰好有2个非零元素</li>
+</ul>
+<p>这种模式实现了固定的50%稀疏率，同时保持了硬件友好的规则性。</p>
+<p><strong>历史演进背景：</strong></p>
+<p>结构化稀疏的发展经历了几个重要阶段：</p>
+<ol>
+<li>
+<p><strong>早期探索（2015-2017）</strong>：
+   - BinaryConnect引入了极端的权重二值化，虽然压缩率高但精度损失严重
+   - XNOR-Net改进了二值网络，通过缩放因子部分恢复表达能力
+   - DoReFa-Net提出了低比特权重和激活的联合量化</p>
+</li>
+<li>
+<p><strong>非结构化稀疏时代（2017-2019）</strong>：
+   - 幅度剪枝（Magnitude Pruning）成为主流，可达90%+稀疏率
+   - 但硬件加速困难，实际推理反而可能更慢
+   - 催生了对硬件友好稀疏模式的需求</p>
+</li>
+<li>
+<p><strong>结构化稀疏兴起（2019-2021）</strong>：
+   - 块稀疏（Block Sparsity）首先获得关注
+   - 通道剪枝（Channel Pruning）在CNN中广泛应用
+   - 2:4稀疏的提出标志着细粒度结构化稀疏的成熟</p>
+</li>
+</ol>
+<p><strong>2:4稀疏的设计哲学：</strong></p>
+<p>2:4模式的选择并非偶然，而是多方面权衡的结果：</p>
+<ol>
+<li>
+<p><strong>硬件实现复杂度</strong>：
+   - 4个元素正好匹配许多SIMD指令的宽度
+   - 6种可能的位置组合可用3比特编码
+   - 解码逻辑简单，面积开销小</p>
+</li>
+<li>
+<p><strong>精度保持能力</strong>：
+   - 50%稀疏率是精度损失的临界点
+   - 更激进的1:4（75%稀疏）会显著降低精度
+   - 局部性原则：相邻权重往往有相似重要性</p>
+</li>
+<li>
+<p><strong>算法灵活性</strong>：
+   - 每组独立决策，并行度高
+   - 支持渐进式稀疏化训练
+   - 可与其他压缩技术（量化、蒸馏）组合</p>
+</li>
+</ol>
+<h3 id="1012">10.1.2 数学原理与优化目标</h3>
+<p>2:4稀疏化过程可以形式化为一个组合优化问题。对于每个4元素组，我们需要选择保留哪2个权重：</p>
+<p><strong>优化目标：</strong>
+$$\min_{\mathcal{M}} \mathcal{L}(f(X; W \odot \mathcal{M}))$$
+其中：</p>
+<ul>
+<li>$\mathcal{M}$ 是稀疏掩码，$\mathcal{M}_{ij} \in \{0,1\}$</li>
+<li>$\odot$ 表示逐元素乘积</li>
+<li>$\mathcal{L}$ 是损失函数</li>
+<li>约束：每4个连续元素中恰好2个为1</li>
+</ul>
+<p><strong>贪心近似算法：</strong>
+实践中采用基于幅值的贪心策略：</p>
+<ol>
+<li>对每组 G_i，计算权重幅值：|w_{i,j}|</li>
+<li>保留幅值最大的2个权重，其余置零</li>
+<li>生成稀疏掩码：$\mathcal{M}_{i,j} = \mathbb{1}[w_{i,j} \in \text{Top-2}(G_i)]$</li>
+</ol>
+<p><strong>理论分析：为什么幅值剪枝有效？</strong></p>
+<p>从泰勒展开的角度分析剪枝的影响：
+$$\Delta \mathcal{L} = \mathcal{L}(W \odot \mathcal{M}) - \mathcal{L}(W) \approx \sum_{i,j} \frac{\partial \mathcal{L}}{\partial w_{ij}} \cdot (w_{ij} \cdot (\mathcal{M}_{ij} - 1))$$
+当梯度和权重独立时（实践中近似成立）：
+$$\mathbb{E}[\Delta \mathcal{L}] \approx -\sum_{i,j} \mathbb{E}\left[\frac{\partial \mathcal{L}}{\partial w_{ij}}\right] \cdot w_{ij} \cdot (1 - \mathcal{M}_{ij})$$
+在训练收敛时，$\mathbb{E}[\frac{\partial \mathcal{L}}{\partial w_{ij}}] \approx 0$，因此主要考虑二阶项：
+$$\Delta \mathcal{L} \approx \frac{1}{2} \sum_{i,j} H_{ij,ij} \cdot w_{ij}^2 \cdot (1 - \mathcal{M}_{ij})$$
+其中$H_{ij,ij}$是Hessian对角元。假设Hessian对角元近似相等，则最小化损失等价于最小化被剪枝权重的平方和，即保留幅值最大的权重。</p>
+<p><strong>改进的重要性度量：</strong></p>
+<p>除了简单的幅值，研究者提出了多种改进的重要性度量：</p>
+<ol>
+<li>
+<p><strong>梯度加权幅值</strong>：
+$$S_{ij} = |w_{ij}| \cdot \left|\frac{\partial \mathcal{L}}{\partial w_{ij}}\right|$$</p>
+</li>
+<li>
+<p><strong>Hessian加权（二阶信息）</strong>：
+$$S_{ij} = |w_{ij}|^2 \cdot H_{ij,ij}$$</p>
+</li>
+<li>
+<p><strong>动量累积重要性</strong>：
+$$S_{ij}^{(t)} = \beta \cdot S_{ij}^{(t-1)} + (1-\beta) \cdot |w_{ij}^{(t)}|$$
+<strong>组合优化的精确解法：</strong></p>
+</li>
+</ol>
+<p>虽然贪心算法效率高，但对于小规模问题，可以求解精确的组合优化：</p>
+<p>对每个4元素组，枚举所有$\binom{4}{2} = 6$种可能的2:4模式，选择使局部损失最小的模式：
+$$\mathcal{M}_i^* = \arg\min_{\mathcal{M}_i \in \text{2:4 patterns}} \mathcal{L}_i(G_i \odot \mathcal{M}_i)$$
+其中$\mathcal{L}_i$是第i组对总损失的贡献。</p>
+<h3 id="1013">10.1.3 硬件加速机制</h3>
+<p>NVIDIA Ampere架构引入了专门的稀疏张量核心（Sparse Tensor Cores），实现了2:4稀疏的硬件级加速。</p>
+<p><strong>压缩存储格式：</strong></p>
+<ul>
+<li>非零值数组：存储2个非零权重值</li>
+<li>索引元数据：3比特编码6种可能的位置组合</li>
+<li>存储效率：相比稠密存储减少50%</li>
+</ul>
+<p><strong>计算流程：</strong></p>
+<ol>
+<li><strong>数据加载</strong>：从内存读取压缩的权重和索引</li>
+<li><strong>动态路由</strong>：硬件根据索引将非零权重路由到计算单元</li>
+<li><strong>跳过零计算</strong>：完全避免零值乘法操作</li>
+<li><strong>吞吐量提升</strong>：理论上可达2倍，实际1.3-1.7倍</li>
+</ol>
+<p><strong>硬件微架构深入分析：</strong></p>
+<p>稀疏张量核心的设计涉及多个创新点：</p>
+<ol>
+<li><strong>索引编码方案</strong>：
+   6种2:4模式的高效编码：</li>
+</ol>
+<pre class="codehilite"><code>模式1: [1,1,0,0] → 000
+模式2: [1,0,1,0] → 001
+模式3: [1,0,0,1] → 010
+模式4: [0,1,1,0] → 011
+模式5: [0,1,0,1] → 100
+模式6: [0,0,1,1] → 101
+</code></pre>
+
+<ol start="2">
+<li>
+<p><strong>数据布局优化</strong>：
+   - <strong>交错存储</strong>：非零值和索引交错存储，提高缓存局部性
+   - <strong>向量化访问</strong>：每次加载包含多个2:4组的数据包
+   - <strong>预取机制</strong>：根据访问模式预取下一批稀疏数据</p>
+</li>
+<li>
+<p><strong>计算单元设计</strong>：</p>
+</li>
+</ol>
+<pre class="codehilite"><code>稀疏MAC单元结构：
+┌─────────────┐
+│ 索引解码器  │ ← 3-bit索引
+└──────┬──────┘
+       │
+┌──────▼──────┐
+│ 2×2 Crossbar│ ← 路由网络
+└──────┬──────┘
+       │
+┌──────▼──────┐
+│  MAC阵列    │ ← 只激活50%单元
+└─────────────┘
+</code></pre>
+
+<ol start="4">
+<li><strong>流水线优化</strong>：
+   - <strong>解码与计算重叠</strong>：索引解码和MAC操作流水线化
+   - <strong>多级缓冲</strong>：稀疏数据缓冲区分级管理
+   - <strong>动态调度</strong>：根据稀疏模式动态分配计算资源</li>
+</ol>
+<p><strong>性能模型分析：</strong></p>
+<p>稀疏加速的实际性能取决于多个因素：</p>
+<ol>
+<li>
+<p><strong>计算密度影响</strong>：
+$$\text{Speedup} = \frac{1}{0.5 + \alpha \cdot \frac{B_{sparse}}{B_{dense}}}$$
+其中α是内存带宽限制因子，B是带宽需求。</p>
+</li>
+<li>
+<p><strong>缓存效率</strong>：
+   - L1缓存命中率：稀疏数据的不规则访问可能降低命中率
+   - L2缓存优化：通过数据重排提高空间局部性</p>
+</li>
+<li>
+<p><strong>负载均衡</strong>：
+   - Warp内的线程可能处理不同数量的非零元素
+   - 需要动态负载均衡机制</p>
+</li>
+</ol>
+<p><strong>与其他加速技术的协同：</strong></p>
+<ol>
+<li>
+<p><strong>混合精度计算</strong>：
+   - INT8 + 2:4稀疏：8倍理论压缩
+   - FP16 + 2:4稀疏：4倍理论压缩
+   - 需要特殊的混合精度稀疏内核</p>
+</li>
+<li>
+<p><strong>张量核心融合</strong>：</p>
+</li>
+</ol>
+<pre class="codehilite"><code>传统流程：Load → Compute → Store
+融合流程：Load → Sparse_Decode → Compute → Quantize → Store
+</code></pre>
+
+<ol start="3">
+<li><strong>多级稀疏</strong>：
+   结合不同粒度的稀疏模式：</li>
+</ol>
+<ul>
+<li>Warp级：2:4细粒度稀疏</li>
+<li>Block级：8×8块稀疏</li>
+<li>Grid级：通道剪枝</li>
+</ul>
+<h3 id="1014">10.1.4 精度恢复策略</h3>
+<p>直接剪枝会导致精度下降，需要通过微调恢复：</p>
+<p><strong>渐进式稀疏化：</strong>
+$$W^{(t+1)} = W^{(t)} - \eta \nabla_W \mathcal{L} \cdot \mathcal{M}^{(t)}$$
+其中稀疏掩码 $\mathcal{M}^{(t)}$ 在训练过程中逐步更新：</p>
+<ul>
+<li>初期：允许更多权重参与更新</li>
+<li>中期：逐步固定2:4模式</li>
+<li>后期：仅更新非零权重</li>
+</ul>
+<p><strong>知识蒸馏增强：</strong>
+使用稠密教师模型指导稀疏学生模型：
+$$\mathcal{L}_{total} = \mathcal{L}_{task} + \lambda \mathcal{L}_{KD}(f_{sparse}, f_{dense})$$
+<strong>高级精度恢复技术：</strong></p>
+<ol>
+<li><strong>稀疏感知训练（Sparsity-Aware Training）：</strong></li>
+</ol>
+<p>从训练初期就引入稀疏约束，让模型适应稀疏结构：
+$$\mathcal{L} = \mathcal{L}_{task} + \alpha \cdot \mathcal{R}_{sparse}(W)$$
+其中稀疏正则项设计为：
+$$\mathcal{R}_{sparse}(W) = \sum_{groups} \left| \text{sort}(|G_i|)[3:4] \right|_2^2$$
+这个正则项惩罚每组中较小的两个权重，促进自然形成2:4模式。</p>
+<ol start="2">
+<li><strong>二阶信息引导的恢复：</strong></li>
+</ol>
+<p>使用Fisher信息矩阵的对角近似来指导恢复过程：
+$$F_{ii} = \mathbb{E}\left[\left(\frac{\partial \log p(y|x)}{\partial w_i}\right)^2\right]$$
+恢复时的学习率自适应调整：
+$$\eta_i = \frac{\eta_0}{1 + \gamma \cdot F_{ii}}$$
+重要参数（高Fisher信息）使用较小学习率，保持稳定性。</p>
+<ol start="3">
+<li><strong>稀疏模式迁移学习：</strong></li>
+</ol>
+<p>当在新任务上微调时，可以迁移预训练模型的稀疏模式：</p>
+<pre class="codehilite"><code>步骤1: 从预训练模型提取2:4模式
+步骤2: 在新任务上固定模式，只更新非零权重
+步骤3: 可选地允许少量模式调整（如5-10%）
+</code></pre>
+
+<ol start="4">
+<li><strong>动态稀疏再生（Dynamic Sparse Regeneration）：</strong></li>
+</ol>
+<p>周期性地重新评估和调整稀疏模式：
+$$\mathcal{M}^{(t+T)} = \text{Update}(\mathcal{M}^{(t)}, \nabla W^{(t:t+T)})$$
+更新策略：</p>
+<ul>
+<li>计算累积梯度重要性：$G_{accum} = \sum_{k=t}^{t+T} |\nabla w^{(k)}|$</li>
+<li>对表现差的稀疏位置，考虑与高梯度的零位置交换</li>
+<li>交换比例通常控制在5-10%</li>
+</ul>
+<p><strong>实验验证的最佳实践：</strong></p>
+<ol>
+<li><strong>学习率调度</strong>：</li>
+</ol>
+<pre class="codehilite"><code>稀疏化阶段：使用余弦退火，从原始学习率的50%开始
+恢复阶段：使用原始学习率的10-20%
+最终微调：使用原始学习率的1-5%
+</code></pre>
+
+<ol start="2">
+<li>
+<p><strong>批量归一化处理</strong>：
+   - 稀疏化后需要重新计算BN统计量
+   - 使用较大batch size（如1024+）获得稳定统计
+   - 考虑使用Group Normalization替代BN</p>
+</li>
+<li>
+<p><strong>层级别策略</strong>：</p>
+</li>
+</ol>
+<pre class="codehilite"><code>敏感层（首尾层）：延迟稀疏化，使用更长恢复期
+中间层：激进稀疏化，快速收敛
+残差连接：保持主路径稠密，只稀疏化旁路
+</code></pre>
+
+<h3 id="1015">10.1.5 与其他稀疏模式的对比</h3>
+<p>| 稀疏模式 | 稀疏率 | 硬件支持 | 精度保持 | 实际加速比 |</p>
+<table>
+<thead>
+<tr>
+<th>稀疏模式</th>
+<th>稀疏率</th>
+<th>硬件支持</th>
+<th>精度保持</th>
+<th>实际加速比</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2:4结构化</td>
+<td>50%</td>
+<td>专用硬件</td>
+<td>优秀</td>
+<td>1.3-1.7x</td>
+</tr>
+<tr>
+<td>1:4结构化</td>
+<td>75%</td>
+<td>理论可行</td>
+<td>较差</td>
+<td>-</td>
+</tr>
+<tr>
+<td>块稀疏(8×8)</td>
+<td>灵活</td>
+<td>部分支持</td>
+<td>良好</td>
+<td>1.2-1.5x</td>
+</tr>
+<tr>
+<td>非结构化</td>
+<td>任意</td>
+<td>困难</td>
+<td>最佳</td>
+<td>&lt;1x(通常)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="1016">10.1.6 实际部署考虑</h3>
+<p><strong>编译器支持：</strong></p>
+<p>2:4稀疏需要深度学习编译器的特殊支持。NVIDIA的cuSPARSELt库提供了完整的API：</p>
+<pre class="codehilite"><code>稀疏化流程：
+
+1. 权重分析：识别可稀疏化的层
+2. 模式生成：基于幅值的2:4模式选择
+3. 元数据编码：生成3比特位置索引
+4. 内核选择：调用稀疏GEMM内核
+</code></pre>
+
+<p><strong>精度-性能权衡曲线：</strong></p>
+<p>实验表明，2:4稀疏在不同模型上的表现：</p>
+<ul>
+<li>BERT：精度损失&lt;0.5%，加速1.5x</li>
+<li>ResNet-50：精度损失&lt;1%，加速1.4x  </li>
+<li>GPT类模型：需要更精细的层级配置</li>
+</ul>
+<p><strong>层级敏感度分析：</strong></p>
+<p>不同层对2:4稀疏的敏感度差异很大：</p>
+<ol>
+<li><strong>嵌入层</strong>：通常不适合稀疏化，信息密度高</li>
+<li><strong>前馈网络层</strong>：最适合2:4稀疏，冗余度高</li>
+<li><strong>注意力投影层</strong>：Q、K矩阵可稀疏，V矩阵需谨慎</li>
+<li><strong>归一化层</strong>：参数量小，稀疏化收益有限</li>
+</ol>
+<h3 id="1017">10.1.7 高级优化技术</h3>
+<p><strong>动态稀疏重分配：</strong></p>
+<p>在训练过程中动态调整稀疏模式：
+$$\mathcal{M}^{(t+1)} = \text{Top-K}(|W^{(t)}| + \gamma \cdot |\nabla W^{(t)}|)$$
+其中γ是梯度重要性权重，允许小权重但梯度大的参数被保留。</p>
+<p><strong>结构化剪枝与蒸馏的协同：</strong></p>
+<p>三阶段训练策略：</p>
+<ol>
+<li><strong>预稀疏化</strong>：使用L1正则化促进权重稀疏</li>
+<li><strong>硬稀疏化</strong>：应用2:4约束，固定模式</li>
+<li><strong>蒸馏恢复</strong>：使用原始稠密模型作为教师</li>
+</ol>
+<p>损失函数设计：
+$$\mathcal{L} = \mathcal{L}_{CE} + \alpha \cdot \mathcal{L}_{KL}(S||T) + \beta \cdot ||W||_1$$</p>
+<h3 id="1018">10.1.8 边缘部署优化</h3>
+<p><strong>内存访问模式优化：</strong></p>
+<p>2:4稀疏的内存访问具有规律性，可以优化：</p>
+<ul>
+<li>预取策略：每次加载4个权重，使用2个</li>
+<li>缓存对齐：确保4元素组不跨缓存行</li>
+<li>向量化：使用SIMD指令处理多个2:4组</li>
+</ul>
+<p><strong>功耗优化：</strong></p>
+<p>稀疏计算的功耗节省来自于：</p>
+<ol>
+<li>减少的内存带宽：50%的数据传输</li>
+<li>跳过的MAC操作：50%的乘累加</li>
+<li>简化的控制逻辑：固定的访问模式</li>
+</ol>
+<p>实测功耗降低：20-35%（取决于层类型和批大小）</p>
+<h3 id="1019-24">10.1.9 2:4稀疏的未来发展</h3>
+<p><strong>硬件演进趋势：</strong></p>
+<p>下一代硬件可能支持更灵活的结构化稀疏：</p>
+<ul>
+<li>可配置N:M模式（运行时可调）</li>
+<li>混合精度稀疏（INT8 + 2:4）</li>
+<li>层级自适应稀疏</li>
+</ul>
+<p><strong>算法创新方向：</strong></p>
+<ol>
+<li><strong>学习型稀疏模式</strong>：使用强化学习自动发现最优稀疏配置</li>
+<li><strong>任务相关稀疏</strong>：根据输入动态调整稀疏模式</li>
+<li><strong>渐进式稀疏</strong>：推理时从密集逐步过渡到稀疏</li>
+</ol>
+<h2 id="102-nm">10.2 N:M稀疏模式设计</h2>
+<h3 id="1021-nm">10.2.1 通用N:M稀疏框架</h3>
+<p>N:M稀疏是2:4模式的推广，表示每M个权重中保留N个非零值。稀疏率为 $s = 1 - N/M$。</p>
+<p><strong>设计空间探索：</strong></p>
+<ul>
+<li><strong>细粒度</strong>：M较小（如4, 8），硬件实现简单，但灵活性受限</li>
+<li><strong>粗粒度</strong>：M较大（如16, 32），更灵活但硬件复杂度增加</li>
+<li><strong>混合粒度</strong>：不同层使用不同的N:M配置</li>
+</ul>
+<p><strong>N:M稀疏的数学表述：</strong></p>
+<p>给定权重张量 $W \in \mathbb{R}^{C_{out} \times C_{in} \times K \times K}$（以卷积层为例），N:M稀疏化过程可以表示为：
+$$W_{sparse} = W \odot \mathcal{M}_{N:M}$$
+其中掩码 $\mathcal{M}_{N:M}$ 满足：
+$$\forall i, \sum_{j=Mi}^{M(i+1)-1} \mathcal{M}_j = N$$
+<strong>硬件实现的关键考虑：</strong></p>
+<ol>
+<li>
+<p><strong>索引开销分析</strong>：
+   - 理论最小比特数：$\lceil \log_2 \binom{M}{N} \rceil$
+   - 实际实现通常向上取整到字节边界
+   - 例如：4:8需要$\lceil \log_2 70 \rceil = 7$比特</p>
+</li>
+<li>
+<p><strong>解码复杂度</strong>：
+   - 组合解码：O(M)时间复杂度
+   - 查找表方法：O(1)但需要$2^{\lceil \log_2 \binom{M}{N} \rceil}$存储
+   - 硬件面积权衡</p>
+</li>
+<li>
+<p><strong>内存对齐</strong>：</p>
+</li>
+</ol>
+<pre class="codehilite"><code>优化的M值选择：
+
+- M = 4k：对齐32-bit边界
+- M = 8k：对齐64-bit边界
+- M = 16k：对齐128-bit缓存行
+</code></pre>
+
+<p><strong>N:M模式的信息论分析：</strong></p>
+<p>从信息论角度看，N:M稀疏的信息容量为：
+$$I_{N:M} = \log_2 \binom{M}{N} + N \log_2 V$$
+其中V是权重值的量化级别数。这给出了压缩率的理论上界：
+$$\text{Compression Ratio} = \frac{M \log_2 V}{I_{N:M}}$$</p>
+<h3 id="1022-nm">10.2.2 最优N:M配置选择</h3>
+<p>选择N:M配置需要平衡多个因素：</p>
+<p><strong>信息论视角：</strong>
+每M个位置选N个的组合数：$C(M,N) = \binom{M}{N}$</p>
+<p>索引开销（比特）：$\lceil \log_2 C(M,N) \rceil$</p>
+<p><strong>硬件效率分析：</strong></p>
+<ul>
+<li>索引解码复杂度：O(log M)</li>
+<li>路由网络复杂度：O(M × N)</li>
+<li>缓存行对齐：M应为缓存行大小的因子</li>
+</ul>
+<p><strong>经验法则：</strong></p>
+<ol>
+<li>M = 2^k（如4, 8, 16）便于硬件实现</li>
+<li>N/M ≈ 0.5 在精度和压缩间取得平衡</li>
+<li>考虑目标硬件的SIMD宽度</li>
+</ol>
+<p><strong>配置选择的多目标优化框架：</strong></p>
+<p>定义优化问题：
+$$\min_{N,M} \alpha \cdot \text{AccuracyLoss}(N,M) + \beta \cdot \text{HardwareCost}(N,M) + \gamma \cdot \text{StorageOverhead}(N,M)$$
+其中：</p>
+<ol>
+<li>
+<p><strong>精度损失模型</strong>：
+$$\text{AccuracyLoss}(N,M) \approx c_1 \cdot (1 - N/M)^2 + c_2 \cdot \exp(-M/M_0)$$
+第一项表示稀疏率的影响，第二项表示粒度的影响。</p>
+</li>
+<li>
+<p><strong>硬件成本模型</strong>：
+$$\text{HardwareCost}(N,M) = \text{DecodingCost}(M,N) + \text{RoutingCost}(M,N)$$
+其中：</p>
+</li>
+</ol>
+<ul>
+<li>解码成本：$O(\log \binom{M}{N})$</li>
+<li>路由成本：$O(M \cdot N)$的crossbar复杂度</li>
+</ul>
+<ol start="3">
+<li><strong>存储开销模型</strong>：
+$$\text{StorageOverhead}(N,M) = \frac{N \cdot b_{value} + \lceil \log_2 \binom{M}{N} \rceil}{M \cdot b_{value}}$$
+<strong>实验验证的最优配置：</strong></li>
+</ol>
+<p>基于大量实验，不同场景的推荐配置：</p>
+<p>| 应用场景 | 推荐配置 | 稀疏率 | 特点 |</p>
+<table>
+<thead>
+<tr>
+<th>应用场景</th>
+<th>推荐配置</th>
+<th>稀疏率</th>
+<th>特点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>移动端推理</td>
+<td>2:4</td>
+<td>50%</td>
+<td>硬件支持最好</td>
+</tr>
+<tr>
+<td>边缘服务器</td>
+<td>4:8, 8:16</td>
+<td>50%</td>
+<td>灵活性更高</td>
+</tr>
+<tr>
+<td>极限压缩</td>
+<td>1:4, 2:8</td>
+<td>75%</td>
+<td>精度损失较大</td>
+</tr>
+<tr>
+<td>混合精度</td>
+<td>动态N:M</td>
+<td>可变</td>
+<td>层自适应</td>
+</tr>
+</tbody>
+</table>
+<p><strong>自动配置搜索算法：</strong></p>
+<pre class="codehilite"><code>输入：模型M，硬件约束H，精度要求A
+输出：每层的最优(N,M)配置
+
+1. 初始化：所有层使用2:4配置
+2. 敏感度分析：
+   - 计算每层的Hessian迹：tr(H_l)
+   - 排序层按敏感度
+3. 贪心优化：
+   for 层l in 敏感度递增顺序:
+     尝试更激进的稀疏配置
+     if 精度损失 &lt; 阈值:
+       接受新配置
+     else:
+       保持原配置
+
+4. 全局微调：
+   使用选定的配置进行端到端微调
+</code></pre>
+
+<h3 id="1023-nm">10.2.3 自适应N:M稀疏</h3>
+<p>不同层对稀疏的敏感度不同，可以采用自适应策略：</p>
+<p><strong>层级敏感度分析：</strong>
+使用泰勒展开估计剪枝影响：
+$$\Delta \mathcal{L} \approx \sum_i \frac{\partial \mathcal{L}}{\partial w_i} \Delta w_i + \frac{1}{2} \sum_{i,j} \frac{\partial^2 \mathcal{L}}{\partial w_i \partial w_j} \Delta w_i \Delta w_j$$
+<strong>混合精度稀疏分配：</strong></p>
+<ul>
+<li>第一层/最后层：较低稀疏率（如2:4）</li>
+<li>中间层：较高稀疏率（如1:4或2:8）</li>
+<li>注意力层：保守稀疏（如3:4）</li>
+</ul>
+<h3 id="1024">10.2.4 块结构化稀疏</h3>
+<p>将N:M模式扩展到二维块：</p>
+<p><strong>块稀疏定义：</strong>
+将权重矩阵分割为 B×B 的块，每个块要么全零要么保留。</p>
+<p><strong>优势：</strong></p>
+<ul>
+<li>更好的缓存局部性</li>
+<li>适合矩阵乘法的分块算法</li>
+<li>可利用现有的稠密计算核</li>
+</ul>
+<p><strong>实现细节：</strong></p>
+<pre class="codehilite"><code>块大小选择：
+
+- GPU：通常 16×16 或 32×32
+- CPU：8×8 或 16×16
+- 考虑向量指令宽度
+</code></pre>
+
+<h3 id="1025-nm">10.2.5 多级N:M稀疏</h3>
+<p><strong>分层级稀疏设计：</strong></p>
+<p>在不同粒度上应用N:M稀疏：</p>
+<ol>
+<li><strong>细粒度级</strong>：2:4在每4个元素</li>
+<li><strong>中粒度级</strong>：4:16在每16个元素  </li>
+<li><strong>粗粒度级</strong>：1:4在每4个块（16×16）</li>
+</ol>
+<p>这种分层设计可以实现更高的压缩率：
+$$总稀疏率 = 1 - \prod_{i=1}^{L} (N_i/M_i)$$
+<strong>动态粒度选择：</strong></p>
+<p>根据层的特性选择合适的粒度：</p>
+<ul>
+<li>卷积层：适合块稀疏，利用空间局部性</li>
+<li>全连接层：适合细粒度N:M</li>
+<li>注意力层：混合使用不同粒度</li>
+</ul>
+<h3 id="1026-nm">10.2.6 N:M稀疏的训练技巧</h3>
+<p><strong>渐进式增加稀疏度：</strong></p>
+<p>从较小的稀疏率开始，逐步增加：</p>
+<pre class="codehilite"><code>Epoch 1-10: 2:4 (50稀疏)
+Epoch 11-20: 2:8 (75稀疏)  
+Epoch 21-30: 1:8 (87.5稀疏)
+</code></pre>
+
+<p>渐进式策略的数学描述：
+$$N(t) = N_{final} + (N_{init} - N_{final}) \cdot e^{-\lambda t}$$
+<strong>稀疏模式的正则化：</strong></p>
+<p>为了促进N:M模式的形成，可以设计特殊的正则项：
+$$\mathcal{R}_{N:M} = \sum_{g \in \text{groups}} \max(0, ||g||_0 - N)^2$$
+这个正则项惩罚超过N个非零元素的组。</p>
+<p><strong>混合精度N:M稀疏：</strong></p>
+<p>结合量化和稀疏化：</p>
+<ol>
+<li>先应用N:M稀疏</li>
+<li>对非零值进行INT8/INT4量化</li>
+<li>使用特殊的编码格式存储</li>
+</ol>
+<p>总压缩率：
+$$\text{Compression} = \frac{N}{M} \times \frac{\text{bits}_{quant}}{32}$$</p>
+<h3 id="1027">10.2.7 硬件支持和加速</h3>
+<p><strong>通用N:M加速器设计：</strong></p>
+<p>一个理想的N:M稀疏加速器应包含：</p>
+<ol>
+<li><strong>索引解码单元</strong>：快速解析N:M位置信息</li>
+<li><strong>数据路由网络</strong>：将非零值路由到正确的计算单元</li>
+<li><strong>跳零逻辑</strong>：避免零值计算</li>
+<li><strong>缓冲管理</strong>：高效的稀疏数据缓存</li>
+</ol>
+<p><strong>软件模拟和优化：</strong></p>
+<p>在没有专用硬件的情况下，可以通过软件优化：</p>
+<pre class="codehilite"><code>CPU优化：
+
+- SIMD指令集（AVX-512）
+- 预取和缓存优化
+- OpenMP并行化
+
+GPU优化：  
+
+- Warp级别的协作
+- 共享内存的使用
+- 动态并行度调整
+</code></pre>
+
+<h3 id="1028">10.2.8 实际应用案例</h3>
+<p><strong>vLLM中的N:M稀疏支持：</strong></p>
+<p>vLLM框架在处理大语言模型时对N:M稀疏的处理：</p>
+<ul>
+<li>自动检测硬件能力</li>
+<li>根据模型大小选择合适的N:M配置</li>
+<li>与PagedAttention结合优化内存使用</li>
+</ul>
+<p><strong>SGLang的稀疏推理优化：</strong></p>
+<p>SGLang在编译时进行稀疏模式分析：</p>
+<ul>
+<li>静态分析模型的稀疏结构</li>
+<li>生成优化的执行计划</li>
+<li>融合稀疏操作和其他算子</li>
+</ul>
+<h3 id="1029-nm">10.2.9 N:M稀疏的未来方向</h3>
+<p><strong>可学习的N:M配置：</strong></p>
+<p>使用神经架构搜索（NAS）来自动发现最优的N:M配置：</p>
+<ul>
+<li>搜索空间：每层的(N,M)对</li>
+<li>优化目标：精度、延迟、能耗的多目标优化</li>
+<li>约束条件：硬件支持的模式</li>
+</ul>
+<p><strong>动态N:M稀疏：</strong></p>
+<p>根据输入内容动态调整稀疏模式：
+$$N(x) = f_{\theta}(\text{features}(x))$$
+其中$f_{\theta}$是一个轻量级网络，预测每层的最佳N值。</p>
+<h2 id="103">10.3 共享参数与模型合并</h2>
+<h3 id="1031">10.3.1 模型合并的数学基础</h3>
+<p>模型合并通过组合多个独立训练的模型来创建一个多功能模型。</p>
+<p><strong>权重空间的几何视角：</strong>
+神经网络的损失景观存在多个局部最优点，这些点可能通过低损失路径相连。</p>
+<p><strong>线性模式连接性（LMC）：</strong>
+给定两个模型 θ_1 和 θ_2，探索连接路径：
+$$θ(α) = (1-α)θ_1 + αθ_2, \quad α \in [0,1]$$
+如果 $\mathcal{L}(θ(α))$ 在整个区间保持较低值，说明存在线性连接性。</p>
+<p><strong>损失景观的理论分析：</strong></p>
+<ol>
+<li><strong>模式连接性的充分条件</strong>：</li>
+</ol>
+<p>两个模型能够线性连接的充分条件包括：</p>
+<ul>
+<li>来自相同的预训练模型</li>
+<li>使用相似的优化路径（如相同的优化器和学习率调度）</li>
+<li>训练数据有足够的重叠</li>
+</ul>
+<p>数学上，如果两个最优点θ_1和θ_2满足：
+$$\lambda_{min}(H(θ_1)) &gt; 0 \text{ 且 } \lambda_{min}(H(θ_2)) &gt; 0$$
+其中H是Hessian矩阵，λ_{min}是最小特征值，则它们更可能存在良好的线性连接。</p>
+<ol start="2">
+<li><strong>置换对称性与对齐</strong>：</li>
+</ol>
+<p>神经网络存在大量的置换对称性。对于全连接层：
+$$f(Wx) = f(PWP^Tx)$$
+其中P是置换矩阵。模型合并前需要解决对齐问题：
+$$\min_P ||θ_1 - Pθ_2P^T||_F$$
+这是一个二次分配问题（QAP），NP-hard，实践中使用贪心算法。</p>
+<ol start="3">
+<li><strong>损失barrier理论</strong>：</li>
+</ol>
+<p>两个模型间的损失barrier定义为：
+$$B(θ_1, θ_2) = \max_{α \in [0,1]} \mathcal{L}(θ(α)) - \frac{\mathcal{L}(θ_1) + \mathcal{L}(θ_2)}{2}$$
+低barrier意味着更好的合并效果。研究表明，宽度越大的网络，barrier越低。</p>
+<p><strong>高级理论结果：</strong></p>
+<ol>
+<li><strong>彩票假设与模型合并</strong>：</li>
+</ol>
+<p>根据彩票假设，存在稀疏子网络达到完整网络的性能。模型合并可以看作寻找多个任务的"超级彩票"：
+$$θ_{merged} = \text{SuperTicket}(θ_1, θ_2, ..., θ_n)$$</p>
+<ol start="2">
+<li><strong>信息瓶颈视角</strong>：</li>
+</ol>
+<p>从信息论角度，模型合并保留了各任务的必要信息：
+$$I(θ_{merged}; Y_i) \geq I(θ_i; Y_i) - \epsilon, \forall i$$
+其中Y_i是任务i的标签，ε是信息损失容忍度。</p>
+<h3 id="1032-task-arithmetic">10.3.2 任务算术（Task Arithmetic）</h3>
+<p>任务算术将模型能力向量化，实现灵活的能力组合。</p>
+<p><strong>任务向量定义：</strong>
+$$\tau_i = θ_{task_i} - θ_{base}$$
+其中：</p>
+<ul>
+<li>$θ_{base}$：预训练基础模型</li>
+<li>$θ_{task_i}$：在任务i上微调后的模型</li>
+<li>$\tau_i$：任务i的"技能向量"</li>
+</ul>
+<p><strong>算术操作：</strong></p>
+<ol>
+<li><strong>能力添加</strong>：$θ_{new} = θ_{base} + \lambda(\tau_A + \tau_B)$</li>
+<li><strong>能力增强</strong>：$θ_{new} = θ_{base} + \lambda \cdot \tau_A$（λ &gt; 1）</li>
+<li><strong>能力消除</strong>：$θ_{new} = θ_{base} - \tau_A$</li>
+</ol>
+<h3 id="1033">10.3.3 高级合并算法</h3>
+<p><strong>TIES-Merging算法：</strong></p>
+<ol>
+<li>
+<p><strong>修剪（Trim）</strong>：
+   保留每个任务向量中变化最大的k%参数：
+$$\tilde{\tau}_i = \tau_i \odot \mathbb{1}[|\tau_i| &gt; \text{Percentile}(|\tau_i|, 100-k)]$$</p>
+</li>
+<li>
+<p><strong>选举（Elect）</strong>：
+   解决符号冲突：
+$$\text{sign}_{elected} = \text{sign}\left(\sum_i \text{sign}(\tilde{\tau}_{i,j})\right)$$</p>
+</li>
+<li>
+<p><strong>解耦合并（Disjoint Merge）</strong>：
+   只合并符号一致的参数：
+$$\theta_{merged,j} = θ_{base,j} + \frac{1}{|\mathcal{A}_j|} \sum_{i \in \mathcal{A}_j} \tilde{\tau}_{i,j}$$
+其中 $\mathcal{A}_j$ 是在位置j上符号与选举结果一致的任务集合。</p>
+</li>
+</ol>
+<p><strong>DARE（Drop And REscale）：</strong></p>
+<p>引入随机性提高泛化：</p>
+<ol>
+<li><strong>随机丢弃</strong>：$\tilde{\tau} = \tau \odot \text{Bernoulli}(1-p)$</li>
+<li><strong>重新缩放</strong>：$\tilde{\tau} = \tilde{\tau} / (1-p)$</li>
+</ol>
+<p>这保持了期望值不变：$\mathbb{E}[\tilde{\tau}] = \tau$</p>
+<h3 id="1034">10.3.4 边缘场景的模型合并</h3>
+<p><strong>存储优化策略：</strong></p>
+<ol>
+<li>
+<p><strong>基础模型 + 任务向量</strong>：
+   - 存储一个通用基础模型（如LLaMA）
+   - 各任务只存储小型任务向量
+   - 存储减少：~90%（任务向量通常很稀疏）</p>
+</li>
+<li>
+<p><strong>动态合并</strong>：</p>
+</li>
+</ol>
+<pre class="codehilite"><code>推理时动态组合：
+if task == &quot;translation&quot;:
+    θ = θ_base + τ_translation
+elif task == &quot;summarization&quot;:
+    θ = θ_base + τ_summarization
+</code></pre>
+
+<p><strong>延迟优化：</strong></p>
+<ul>
+<li>预计算常用任务组合</li>
+<li>缓存合并后的权重</li>
+<li>使用量化的任务向量（INT8/INT4）</li>
+</ul>
+<h3 id="1035">10.3.5 参数共享的理论基础</h3>
+<p><strong>神经网络的对称性：</strong></p>
+<p>神经网络存在大量的对称性，这为参数共享提供了理论基础：</p>
+<ol>
+<li><strong>置换对称性</strong>：隐层神经元可以任意交换</li>
+<li><strong>缩放对称性</strong>：权重可以通过缩放保持功能不变</li>
+<li><strong>旋转对称性</strong>：特定架构下的权重旋转</li>
+</ol>
+<p><strong>模式崩塌现象：</strong></p>
+<p>在训练后期，模型权重往往会呈现某种模式：
+$$W \approx \sum_{i=1}^{r} \sigma_i u_i v_i^T$$
+其中$r$远小于矩阵的秩，这表明权重矩阵是低秩的。</p>
+<h3 id="1036">10.3.6 高级模型合并技术</h3>
+<p><strong>模型汤（Model Soup）：</strong></p>
+<p>通过平均多个独立训练的模型来提高泛化能力：</p>
+<ol>
+<li><strong>均匀汤</strong>：$\theta_{soup} = \frac{1}{K}\sum_{k=1}^{K} \theta_k$</li>
+<li><strong>贪婪汤</strong>：逐个添加模型，只保留提高性能的</li>
+<li><strong>加权汤</strong>：$\theta_{soup} = \sum_{k=1}^{K} w_k \theta_k$，其中$w_k$基于验证集性能</li>
+</ol>
+<p><strong>模型缝合（Model Stitching）：</strong></p>
+<p>将不同模型的部分组合起来：</p>
+<ul>
+<li>前几层使用模型A（善于特征提取）</li>
+<li>后几层使用模型B（善于任务特定推理）</li>
+<li>需要额外的适配层</li>
+</ul>
+<p><strong>参数共享的层级设计：</strong></p>
+<ol>
+<li><strong>跨层共享</strong>：</li>
+</ol>
+<pre class="codehilite"><code>Layer_i = Layer_j （完全共享）
+Layer_i = α*Layer_j + β*Layer_k （线性组合）
+</code></pre>
+
+<ol start="2">
+<li><strong>循环层设计</strong>：
+   重复使用同一组参数：
+$$h_{t+1} = f(h_t, x; \theta_{shared})$$</li>
+</ol>
+<h3 id="1037">10.3.7 模型合并的挑战与解决方案</h3>
+<p><strong>干扰问题：</strong></p>
+<p>不同任务的更新可能相互干扰：</p>
+<ul>
+<li>正干扰：两个任务在同一参数上有相反的更新</li>
+<li>负干扰：一个任务的更新损害另一个任务的性能</li>
+</ul>
+<p><strong>解决方案：</strong></p>
+<ol>
+<li>
+<p><strong>正交化任务向量</strong>：
+$$\tau'_i = \tau_i - \sum_{j&lt;i} \frac{\langle \tau_i, \tau_j \rangle}{||\tau_j||^2} \tau_j$$</p>
+</li>
+<li>
+<p><strong>选择性合并</strong>：
+   只合并不冲突的参数更新</p>
+</li>
+<li>
+<p><strong>多任务学习视角</strong>：
+   使用多任务学习的方法重新训练</p>
+</li>
+</ol>
+<h3 id="1038">10.3.8 实际应用案例分析</h3>
+<p><strong>Mistral的MoE架构：</strong></p>
+<p>Mistral 8x7B使用了参数共享的思想：</p>
+<ul>
+<li>8个专家共享基础参数</li>
+<li>每个专家有独特的FFN层</li>
+<li>根据输入动态选择2个专家</li>
+</ul>
+<p><strong>LoRA合并实践：</strong></p>
+<p>在实际使用中，LoRA合并常见的做法：</p>
+<ol>
+<li>训练多个LoRA适配器</li>
+<li>使用SVD分解合并后的权重</li>
+<li>重新量化以减小存储</li>
+</ol>
+<p><strong>边缘设备上的实现：</strong></p>
+<pre class="codehilite"><code>手机端部署：
+
+- 基础模型：1GB（INT4量化）
+- 任务向量：每个10-50MB
+- 内存要求：&lt;2GB
+- 切换延迟：&lt;100ms
+</code></pre>
+
+<h3 id="1039">10.3.9 未来发展趋势</h3>
+<p><strong>持续学习中的模型合并：</strong></p>
+<p>随着模型不断更新，如何高效合并新旧版本：</p>
+<ul>
+<li>增量式合并：只存储版本间的差异</li>
+<li>动态权重分配：根据时间衰减旧版本权重</li>
+<li>知识图谱引导：保留重要知识，更新过时内容</li>
+</ul>
+<p><strong>跨模态模型合并：</strong></p>
+<p>将视觉、语言、音频模型合并：</p>
+<ul>
+<li>共享表征空间</li>
+<li>跨模态对齐</li>
+<li>统一的任务向量表示</li>
+</ul>
+<h2 id="104">10.4 稀疏张量的高效存储</h2>
+<h3 id="1041">10.4.1 稀疏存储格式</h3>
+<p><strong>COO（Coordinate）格式：</strong>
+存储三个数组：</p>
+<ul>
+<li>行索引：row_indices[]</li>
+<li>列索引：col_indices[]</li>
+<li>非零值：values[]</li>
+</ul>
+<p>存储开销：$O(nnz \times (2 \times \text{sizeof}(int) + \text{sizeof}(float)))$</p>
+<p><strong>CSR（Compressed Sparse Row）格式：</strong></p>
+<ul>
+<li>行指针：row_ptr[]（长度m+1）</li>
+<li>列索引：col_indices[]（长度nnz）</li>
+<li>非零值：values[]（长度nnz）</li>
+</ul>
+<p>优势：行访问高效，适合矩阵-向量乘法</p>
+<p><strong>块稀疏格式：</strong>
+将矩阵分块，只存储非零块：</p>
+<ul>
+<li>块索引：block_indices[]</li>
+<li>块数据：block_values[]（每个块密集存储）</li>
+</ul>
+<p><strong>深入分析各种格式的性能特性：</strong></p>
+<ol>
+<li><strong>COO格式的优化变体</strong>：</li>
+</ol>
+<p><strong>排序COO（SCOO）</strong>：</p>
+<ul>
+<li>按行主序或列主序排序</li>
+<li>改善缓存局部性</li>
+<li>支持二分查找：O(log nnz)</li>
+</ul>
+<p><strong>分段COO（Segmented COO）</strong>：</p>
+<pre class="codehilite"><code>将矩阵分为k×k的瓦片
+每个瓦片独立使用COO
+瓦片元数据：tile_ptr[]
+优势：并行处理，更好的缓存利用
+</code></pre>
+
+<ol start="2">
+<li><strong>CSR/CSC的高级技巧</strong>：</li>
+</ol>
+<p><strong>双重压缩CSR（DCSR）</strong>：
+   对于超稀疏矩阵（nnz &lt;&lt; m×n）：</p>
+<ul>
+<li>只存储非空行的行指针</li>
+<li>额外的行索引数组</li>
+<li>存储节省：O(m) → O(nnz)</li>
+</ul>
+<p><strong>混合CSR（Hybrid CSR）</strong>：</p>
+<pre class="codehilite"><code>密集行：直接存储所有元素
+稀疏行：使用传统CSR
+判断阈值：密度 &gt; 0.5
+</code></pre>
+
+<ol start="3">
+<li><strong>块稀疏的变体</strong>：</li>
+</ol>
+<p><strong>可变块大小（VBS）</strong>：</p>
+<ul>
+<li>不同区域使用不同块大小</li>
+<li>自适应选择：密集区域大块，稀疏区域小块</li>
+<li>元数据开销vs灵活性权衡</li>
+</ul>
+<p><strong>层级块稀疏</strong>：</p>
+<pre class="codehilite"><code>Level 0: 64×64 超块
+Level 1: 16×16 块
+Level 2: 4×4 子块
+多级索引结构
+</code></pre>
+
+<p><strong>稀疏格式选择决策树：</strong></p>
+<pre class="codehilite"><code>if 稀疏率 &gt; 90%:
+    if 随机分布:
+        使用 COO 或 DCSR
+    else if 块状分布:
+        使用块稀疏
+else if 50% &lt; 稀疏率 &lt; 90%:
+    if 行访问为主:
+        使用 CSR
+    else if 列访问为主:
+        使用 CSC
+    else:
+        使用 2:4 结构化稀疏
+else:
+    考虑保持密集格式
+</code></pre>
+
+<p><strong>性能建模与分析：</strong></p>
+<p>给定稀疏矩阵A和密集向量x的乘法y = Ax：</p>
+<ol>
+<li>
+<p><strong>内存带宽需求</strong>：
+   - COO: $B_{COO} = nnz \times (2 \times 4 + 4) = 12 \times nnz$ 字节
+   - CSR: $B_{CSR} = nnz \times 8 + m \times 4$ 字节
+   - 2:4: $B_{2:4} = nnz \times 4 + \frac{nnz}{2} \times 0.375$ 字节</p>
+</li>
+<li>
+<p><strong>计算效率</strong>：
+   - FLOPS利用率 = $\frac{2 \times nnz}{时间 \times 峰值FLOPS}$
+   - 内存效率 = $\frac{理论带宽需求}{实际带宽使用}$</p>
+</li>
+</ol>
+<h3 id="1042">10.4.2 硬件友好的稀疏格式</h3>
+<p><strong>2:4格式编码：</strong></p>
+<pre class="codehilite"><code>原始：[0.1, 0, 0, 0.3] 
+编码：
+
+- 值：[0.1, 0.3]
+- 索引：0b1001（二进制表示位置）
+</code></pre>
+
+<p><strong>向量化友好格式：</strong>
+对齐到SIMD宽度（如AVX-512的512位）：</p>
+<ul>
+<li>将多个2:4组打包到一个向量寄存器</li>
+<li>使用掩码寄存器进行选择性加载/存储</li>
+</ul>
+<h3 id="1043">10.4.3 压缩技术集成</h3>
+<p><strong>量化 + 稀疏：</strong></p>
+<ol>
+<li>先进行2:4稀疏化</li>
+<li>对非零值进行INT8/INT4量化</li>
+<li>总压缩率：50%（稀疏）× 25%（INT8）= 12.5%</li>
+</ol>
+<p><strong>聚类 + 稀疏：</strong></p>
+<ul>
+<li>对非零权重进行K-means聚类</li>
+<li>存储聚类中心和索引</li>
+<li>适合权重分布有明显模式的情况</li>
+</ul>
+<p><strong>高级压缩技术组合：</strong></p>
+<ol>
+<li><strong>三元组压缩（Ternary + Sparse）</strong>：</li>
+</ol>
+<p>将权重量化为{-α, 0, +α}三个值：
+$$W_{ternary} = α \cdot \text{sign}(W) \cdot \mathbb{1}[|W| &gt; \theta]$$
+结合2:4稀疏后：</p>
+<ul>
+<li>每个非零权重只需1比特（符号）</li>
+<li>共享缩放因子α</li>
+<li>总存储：$\frac{nnz}{2} \times (1 + 3) + 32 = 2 \times nnz + 32$ 比特</li>
+</ul>
+<ol start="2">
+<li><strong>向量量化稀疏（VQ-Sparse）</strong>：</li>
+</ol>
+<p>对非零权重进行向量量化：</p>
+<pre class="codehilite"><code>1. 将非零权重分组（如每16个）
+2. 对每组进行向量量化
+3. 存储码本索引 + 稀疏掩码
+</code></pre>
+
+<p>压缩率分析：
+$$\text{Bits/weight} = \frac{\log_2(K)}{G} + \frac{\text{SparsityBits}}{M}$$
+其中K是码本大小，G是组大小，M是稀疏块大小。</p>
+<ol start="3">
+<li><strong>熵编码增强</strong>：</li>
+</ol>
+<p>利用稀疏模式的统计特性进一步压缩：</p>
+<p><strong>霍夫曼编码2:4模式</strong>：</p>
+<pre class="codehilite"><code>常见模式分配短码：
+[1,1,0,0] → 00
+[0,0,1,1] → 01
+[1,0,1,0] → 100
+其他模式 → 更长编码
+</code></pre>
+
+<p><strong>算术编码非零值</strong>：
+   基于权重分布的概率模型进行编码</p>
+<p><strong>联合优化框架：</strong></p>
+<p>同时优化稀疏性、量化和编码：
+$$\min_{S,Q,C} \mathcal{L}(f(X; S(Q(W)))) + \lambda_1 \cdot R_{sparse}(S) + \lambda_2 \cdot R_{quant}(Q) + \lambda_3 \cdot R_{coding}(C)$$
+其中：</p>
+<ul>
+<li>S: 稀疏化函数</li>
+<li>Q: 量化函数  </li>
+<li>C: 编码函数</li>
+<li>R: 各自的比特率成本</li>
+</ul>
+<p><strong>实际部署的存储格式设计：</strong></p>
+<pre class="codehilite"><code>稀疏量化张量格式（SQT）：
+Header (64 bytes):
+
+  - 维度信息
+  - 稀疏类型（2:4, N:M等）
+  - 量化参数（scale, zero_point）
+  - 压缩方法标识
+
+Data Section:
+
+  - 稀疏索引（可选压缩）
+  - 量化值（打包存储）
+  - 码本（如果使用VQ）
+
+优化特性：
+
+  - 64字节对齐
+  - 支持mmap直接映射
+  - 增量解压缩
+</code></pre>
+
+<h3 id="1044">10.4.4 动态稀疏管理</h3>
+<p><strong>稀疏模式缓存：</strong></p>
+<pre class="codehilite"><code>缓存结构：
+
+- 模式ID -&gt; 稀疏掩码
+- LRU替换策略
+- 预计算常见模式
+</code></pre>
+
+<p><strong>增量更新：</strong>
+对于在线学习场景，支持稀疏模式的增量更新：
+$$\mathcal{M}^{(t+1)} = \alpha \mathcal{M}^{(t)} + (1-α) \mathcal{M}_{new}$$</p>
+<h2 id="_1">本章小结</h2>
+<p>本章深入探讨了稀疏化和参数共享两大模型压缩技术：</p>
+<ol>
+<li>
+<p><strong>2:4结构化稀疏</strong>：通过硬件-算法协同设计，实现了50%压缩率和1.3-1.7倍实际加速。其成功关键在于规则的稀疏模式使硬件能够高效跳过零计算。</p>
+</li>
+<li>
+<p><strong>N:M稀疏设计</strong>：提供了灵活的稀疏配置空间，需要在硬件复杂度、压缩率和精度间权衡。自适应和混合粒度策略可以进一步优化性能。</p>
+</li>
+<li>
+<p><strong>模型合并技术</strong>：从简单的权重平均到复杂的任务算术，提供了低成本的多任务模型构建方案。TIES-Merging和DARE等方法解决了参数冲突问题。</p>
+</li>
+<li>
+<p><strong>稀疏存储优化</strong>：不同的稀疏格式适用于不同场景，硬件友好的格式设计是实现加速的关键。量化与稀疏的结合可以达到极高的压缩率。</p>
+</li>
+</ol>
+<p>关键公式回顾：</p>
+<ul>
+<li>2:4稀疏约束：$||G_i||_0 = 2$ for each 4-element group</li>
+<li>任务向量：$\tau = θ_{task} - θ_{base}$</li>
+<li>TIES符号选举：$\text{sign}_{elected} = \text{sign}(\sum_i \text{sign}(\tau_i))$</li>
+<li>存储效率：压缩率 = 稀疏率 × 量化压缩率</li>
+</ul>
+<h2 id="_2">练习题</h2>
+<h3 id="_3">基础题</h3>
+<ol>
+<li><strong>2:4稀疏计算</strong>
+   给定权重向量 [0.5, -0.2, 0.8, -0.1, 0.3, 0.7, -0.6, 0.4]，应用2:4稀疏化。计算稀疏化后的向量和所需的索引位数。</li>
+</ol>
+<p><em>Hint: 每4个元素为一组，保留绝对值最大的2个。</em></p>
+<ol start="2">
+<li><strong>稀疏存储分析</strong>
+   一个 1024×1024 的矩阵采用2:4稀疏，使用FP16存储。计算采用COO格式和2:4专用格式的存储需求（字节）。</li>
+</ol>
+<p><em>Hint: 2:4格式每4个元素需要2个FP16值和3比特索引。</em></p>
+<ol start="3">
+<li><strong>任务向量计算</strong>
+   基础模型参数 θ_base = [1.0, 2.0, 3.0]，两个任务微调后的参数分别为 θ_A = [1.2, 2.1, 2.8] 和 θ_B = [0.9, 2.3, 3.1]。计算任务向量并执行任务算术 θ_base + 0.5(τ_A + τ_B)。</li>
+</ol>
+<p><em>Hint: 先计算每个任务向量，然后进行线性组合。</em></p>
+<ol start="4">
+<li><strong>N:M配置选择</strong>
+   对于一个要求75%稀疏率的场景，列出所有可能的N:M配置（M≤8），并计算各自的索引开销。</li>
+</ol>
+<p><em>Hint: 稀疏率 = 1 - N/M = 0.75</em></p>
+<h3 id="_4">挑战题</h3>
+<ol start="5">
+<li><strong>混合稀疏优化</strong>
+   设计一个神经网络的层级稀疏方案：网络有10层，第1层和第10层对精度最敏感，中间层可以承受更高稀疏。在总体稀疏率达到60%的约束下，如何分配各层的N:M配置？</li>
+</ol>
+<p><em>Hint: 考虑使用拉格朗日乘数法优化分配。</em></p>
+<ol start="6">
+<li><strong>TIES-Merging分析</strong>
+   三个任务向量在某参数位置的更新分别为：τ_1 = +0.5, τ_2 = -0.3, τ_3 = +0.2。使用TIES-Merging的选举和合并策略，计算最终的参数更新。如果先应用50%的修剪阈值会如何影响结果？</li>
+</ol>
+<p><em>Hint: 考虑符号投票和选择性平均。</em></p>
+<ol start="7">
+<li><strong>稀疏模式的信息论分析</strong>
+   证明2:4稀疏模式的索引信息熵上界为log₂(6)比特。推广到一般的N:M稀疏，导出索引熵的公式。这对硬件设计有什么启示？</li>
+</ol>
+<p><em>Hint: 使用组合数学和信息论基础。</em></p>
+<ol start="8">
+<li><strong>动态稀疏调度</strong>
+   设计一个算法，在推理时根据输入的特征动态选择不同层的稀疏模式。目标是在保持精度的同时最大化吞吐量。考虑：如何快速评估每层的重要性？如何避免模式切换的开销？</li>
+</ol>
+<p><em>Hint: 可以使用输入相关的敏感度度量，如梯度范数或激活值统计。</em></p>
+<details>
+<summary>答案（点击展开）</summary>
+<ol>
+<li>
+<p>稀疏化结果：[0.5, 0, 0.8, 0], [0, 0.7, -0.6, 0]。每组需要3比特索引，总共6比特。</p>
+</li>
+<li>
+<p>COO格式：3×524,288×2 = 3,145,728字节。2:4格式：2×262,144×2 + 262,144×3/8 = 1,147,192字节。</p>
+</li>
+<li>
+<p>τ_A = [0.2, 0.1, -0.2], τ_B = [-0.1, 0.3, 0.1]。结果：[1.05, 2.2, 2.95]。</p>
+</li>
+<li>
+<p>1:4（索引2比特）、2:8（索引约6.6比特）、3:12等，具体计算略。</p>
+</li>
+<li>
+<p>示例方案：第1、10层用3:4（25%稀疏），第2-9层用1:3（66.7%稀疏），总体约60%。</p>
+</li>
+<li>
+<p>符号投票：2正1负，选正。合并：(0.5+0.2)/2=0.35。修剪后可能只保留τ_1。</p>
+</li>
+<li>
+<p>C(4,2)=6种组合，熵上界log₂(6)≈2.58比特。一般公式：H ≤ log₂(C(M,N))。</p>
+</li>
+<li>
+<p>算法框架：计算各层激活范数→映射到稀疏等级→缓存常用模式→批量切换。</p>
+</li>
+</ol>
+</details>
+            </article>
+            
+            <nav class="page-nav"><a href="chapter9.html" class="nav-link prev">← 第9章：模型剪枝</a><a href="chapter11.html" class="nav-link next">第11章：动态网络架构 →</a></nav>
+        </main>
+    </div>
+</body>
+</html>

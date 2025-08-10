@@ -1,0 +1,1087 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <base href="./">
+    <title>第11章：动态网络架构</title>
+    <link rel="stylesheet" href="assets/style.css">
+    <link rel="stylesheet" href="assets/highlight.css">
+    <script src="assets/script.js" defer></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script>
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$']],
+                displayMath: [['$$', '$$']],
+                processEscapes: false,
+                packages: {'[+]': ['noerrors', 'ams']}
+            },
+            options: {
+                ignoreHtmlClass: 'tex2jax_ignore',
+                processHtmlClass: 'tex2jax_process'
+            },
+            loader: {
+                load: ['[tex]/noerrors', '[tex]/ams']
+            }
+        };
+    </script>
+</head>
+<body>
+    <div class="container">
+        <nav id="sidebar" class="sidebar">
+            <div class="sidebar-header">
+                <h3>目录</h3>
+                <button id="sidebar-toggle" class="sidebar-toggle">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </button>
+            </div>
+            <div class="sidebar-search">
+                <input type="text" id="sidebar-search-input" placeholder="搜索..." autocomplete="off">
+            </div>
+            <div id="tree-container">
+                <nav class="tree-nav" role="tree">
+                    <div class="tree-item " >
+                        <a href="index.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">边缘侧大语言模型推理加速：从算法到系统</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter1.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第1章：边缘推理的挑战与机遇</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter2.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第2章：性能分析与Roofline模型</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter3.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第3章：小语言模型(SLM)概览</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter4.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第4章：后训练量化（PTQ）</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter5.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第5章：Hessian引导的量化方法</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter6.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第6章：旋转量化与极低比特量化</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter7.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第7章：量化友好的模型设计</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter8.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第8章：量化工具链</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter9.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第9章：模型剪枝</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter10.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第10章：稀疏化与参数共享</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item active" >
+                        <a href="chapter11.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第11章：动态网络架构</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter12.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第12章：知识蒸馏</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter13.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第13章：注意力机制优化</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter14.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第14章：KV Cache管理与压缩</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter15.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第15章：解码加速技术</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter16.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第16章：首Token延迟(TTFT)优化</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter17.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第17章：内存管理与Offloading</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter18.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第18章：边缘推理框架</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter19.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第19章：深度学习编译器</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter20.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第20章：硬件特定优化</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter21.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第21章：跨平台部署实践</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter22.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第22章：视觉编码器优化</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter23.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第23章：多模态融合与平衡</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter24.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第24章：实时语音场景优化</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter25.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第25章：神经架构搜索（NAS）</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="chapter26.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">第26章：未来技术展望</span>
+                        </a>
+                    </div>
+                
+                    <div class="tree-item " >
+                        <a href="CLAUDE.html" class="tree-link">
+                            <span class="tree-icon">📄</span>
+                            <span class="tree-title">项目说明</span>
+                        </a>
+                    </div>
+                </nav>
+            </div>
+        </nav>
+        
+        <main class="content">
+            <article>
+                <h1 id="11">第11章：动态网络架构</h1>
+<p>在边缘设备部署深度学习模型时，一个关键挑战是如何在不同的资源约束和精度要求下灵活调整模型的计算量。动态网络架构提供了一种优雅的解决方案：通过在运行时动态调整网络结构，实现计算资源与任务需求的最优匹配。本章将深入探讨四种主要的动态网络技术：Slimmable Neural Networks、弹性宽度网络、早退机制和Token剪枝，这些技术为边缘AI提供了前所未有的灵活性。</p>
+<h2 id="111-slimmable-neural-networks">11.1 Slimmable Neural Networks原理</h2>
+<h3 id="1111">11.1.1 动态宽度网络的基本概念</h3>
+<p>Slimmable Neural Networks (S-Net) 的核心思想是训练一个可以在不同宽度配置下工作的单一网络。与传统的固定架构不同，S-Net允许在推理时动态选择网络宽度，从而在单一模型中实现多种精度-效率权衡。</p>
+<p><strong>数学建模与通道选择</strong></p>
+<p>设原始网络在第l层有C_l个通道，S-Net定义了一组宽度比例因子 α = {α_1, α_2, ..., α_k}，其中 0 &lt; α_i ≤ 1。在推理时，第l层使用的通道数为：</p>
+<p>C_l^(α_i) = ⌊α_i · C_l⌋</p>
+<p>这种设计使得同一个网络可以在不同的计算预算下运行。例如，当 α = {0.25, 0.5, 0.75, 1.0} 时，网络可以在25%、50%、75%和100%的宽度下工作。</p>
+<p><strong>实例分析：ResNet-50的Slimmable变体</strong></p>
+<p>考虑ResNet-50的第一个残差块，原始配置为：</p>
+<ul>
+<li>Conv1: 64 → 64, 1×1</li>
+<li>Conv2: 64 → 64, 3×3</li>
+<li>Conv3: 64 → 256, 1×1</li>
+</ul>
+<p>在α = 0.5的配置下：</p>
+<ul>
+<li>Conv1: 32 → 32, 1×1</li>
+<li>Conv2: 32 → 32, 3×3</li>
+<li>Conv3: 32 → 128, 1×1</li>
+</ul>
+<p>计算量从原始的 3.7M FLOPs 降至约 0.93M FLOPs，实现了75%的计算节省。</p>
+<p><strong>通道选择的有序性原则</strong></p>
+<p>一个关键的设计原则是通道选择的有序性。对于任意两个宽度配置 α_i &lt; α_j，选择的通道集合满足：</p>
+<p>Channels(α_i) ⊆ Channels(α_j)</p>
+<p>这意味着较窄的网络使用的通道是较宽网络通道的子集。这种设计确保了：</p>
+<ol>
+<li>参数共享最大化：窄网络完全复用宽网络的参数</li>
+<li>训练稳定性：避免了不同宽度间的参数冲突</li>
+<li>硬件友好：连续的内存访问模式</li>
+</ol>
+<p><strong>数学证明：有序性原则的重要性</strong></p>
+<p>假设违反有序性原则，即存在通道c满足 c ∈ Channels(α_i) 但 c ∉ Channels(α_j)，其中 α_i &lt; α_j。这会导致：</p>
+<ol>
+<li><strong>梯度冲突</strong>：设参数θ_c对应通道c，在训练时：
+   ∇θ_c L = P(α_i) · ∇θ_c L^(α_i) + (1-P(α_i)) · 0</li>
+</ol>
+<p>其中P(α_i)是选择宽度α_i的概率。这种不一致的梯度更新会导致训练不稳定。</p>
+<ol start="2">
+<li><strong>特征依赖破坏</strong>：深层网络依赖浅层特征，不连续的通道选择破坏了特征传递的一致性。</li>
+</ol>
+<p><strong>计算复杂度分析</strong></p>
+<p>对于标准卷积层，宽度为α的网络的计算复杂度为：</p>
+<p>FLOPs(α) = α² · FLOPs(1.0)</p>
+<p>这是因为输入和输出通道数都按α缩放。具体推导：</p>
+<p>设卷积核大小为K×K，输入通道C_in，输出通道C_out，特征图大小H×W，则：</p>
+<ul>
+<li>完整网络：FLOPs(1.0) = K² · C_in · C_out · H · W</li>
+<li>宽度α网络：FLOPs(α) = K² · (α·C_in) · (α·C_out) · H · W = α² · FLOPs(1.0)</li>
+</ul>
+<p>对于深度可分离卷积：</p>
+<p>FLOPs_dw(α) = α · FLOPs_dw(1.0)
+FLOPs_pw(α) = α² · FLOPs_pw(1.0)</p>
+<p><strong>实例计算：MobileNetV2中的深度可分离卷积</strong></p>
+<p>考虑输入224×224×32的深度可分离卷积块：</p>
+<ul>
+<li>Depthwise: 3×3×32, FLOPs = 3²×32×224² = 14.5M</li>
+<li>Pointwise: 1×1×32×96, FLOPs = 32×96×224² = 154.1M</li>
+</ul>
+<p>在α = 0.5时：</p>
+<ul>
+<li>Depthwise: FLOPs(0.5) = 0.5×14.5M = 7.25M</li>
+<li>Pointwise: FLOPs(0.5) = 0.25×154.1M = 38.5M</li>
+<li>总计算量降低至 (7.25+38.5)/(14.5+154.1) ≈ 27%</li>
+</ul>
+<p>内存占用则呈线性关系：</p>
+<p>Memory(α) = α · Memory(1.0) + Memory_fixed</p>
+<p>其中Memory_fixed包括批归一化参数等固定开销。</p>
+<p><strong>内存占用的详细分析</strong></p>
+<p>考虑每层的内存需求：</p>
+<ol>
+<li><strong>权重内存</strong>：W_mem(α) = α² · W_mem(1.0)</li>
+<li><strong>激活内存</strong>：A_mem(α) = α · A_mem(1.0)</li>
+<li><strong>固定内存</strong>：包括BN参数 (2×C_l)、偏置等</li>
+</ol>
+<p>总内存公式：
+Memory_total(α) = Σ_l [α²·W_l + α·A_l + 2·C_l]</p>
+<p>对于ResNet-50，完整模型约25.5M参数，α=0.5时参数量降至约6.4M，但考虑BN参数后实际为6.5M。</p>
+<h3 id="1112-switchable-bn">11.1.2 可切换批归一化（Switchable BN）</h3>
+<p>S-Net面临的一个关键挑战是批归一化（BN）层的处理。不同宽度的网络具有不同的特征分布，使用相同的BN参数会导致性能严重下降。Switchable BN通过为每个宽度配置维护独立的BN参数解决了这个问题。</p>
+<p><strong>理论基础：为什么需要Switchable BN</strong></p>
+<p>考虑第l层在不同宽度下的激活分布。设完整网络的激活为 X^(1.0) ∈ R^{B×C_l×H×W}，宽度α下的激活为 X^(α) ∈ R^{B×αC_l×H×W}。由于：</p>
+<ol>
+<li>通道选择改变了特征的表示能力</li>
+<li>前面层的宽度变化产生累积效应</li>
+<li>不同宽度下的优化路径不同</li>
+</ol>
+<p>导致 E[X^(α)] ≠ E[X^(1.0)] 且 Var[X^(α)] ≠ Var[X^(1.0)]。</p>
+<p><strong>实验验证：特征分布差异</strong></p>
+<p>在ImageNet预训练的ResNet-50上测量不同宽度的激活统计量：</p>
+<ul>
+<li>Layer 2.1: μ(1.0)=0.42, σ(1.0)=1.23 vs μ(0.5)=0.31, σ(0.5)=0.87</li>
+<li>Layer 3.4: μ(1.0)=0.18, σ(1.0)=0.95 vs μ(0.5)=0.25, σ(0.5)=1.42</li>
+</ul>
+<p>这种分布偏移在深层更加明显，验证了Switchable BN的必要性。</p>
+<p><strong>Switchable BN的数学表达</strong></p>
+<p>对于宽度配置α_i，BN层的计算为：</p>
+<p>y^(α_i) = γ^(α_i) · (x - μ^(α_i))/√(σ^(α_i)² + ε) + β^(α_i)</p>
+<p>其中，μ^(α_i)和σ^(α_i)是宽度α_i对应的运行均值和方差，γ^(α_i)和β^(α_i)是对应的缩放和偏移参数。</p>
+<p>在训练时，每个宽度配置的BN统计量独立更新：</p>
+<p>μ^(α_i) ← (1 - m) · μ^(α_i) + m · μ_batch^(α_i)
+σ^(α_i)² ← (1 - m) · σ^(α_i)² + m · σ_batch^(α_i)²</p>
+<p>其中m是动量参数，μ_batch和σ_batch是当前批次的统计量。</p>
+<p><strong>收敛性分析</strong></p>
+<p>设真实均值为μ*，批次均值的方差为σ²_batch/B（B为批大小），则运行均值的收敛速度为：</p>
+<p>E[(μ^(t) - μ<em>)²] = (1-m)^(2t) · E[(μ^(0) - μ</em>)²] + m²σ²_batch/(B(1-(1-m)²))</p>
+<p>当t→∞时，稳态误差为 m²σ²_batch/(B(2m-m²))。选择m=0.1时，需要约50个迭代达到95%收敛。</p>
+<p><strong>参数存储优化</strong></p>
+<p>Switchable BN的额外参数开销为：</p>
+<p>Params_SBN = |α| × (2 × Σ_l αC_l)</p>
+<p>对于ResNet-50和4个宽度配置，额外参数约占总参数的0.5%。具体计算：</p>
+<ul>
+<li>ResNet-50总参数：25.5M</li>
+<li>BN参数（4宽度）：0.13M</li>
+<li>相对开销：0.51%</li>
+</ul>
+<p>为进一步减少开销，可以采用：</p>
+<ol>
+<li><strong>参数共享策略</strong>：相近宽度共享部分BN参数
+   γ^(0.75) = λγ^(1.0) + (1-λ)γ^(0.5)</li>
+</ol>
+<p>其中λ = (0.75-0.5)/(1.0-0.5) = 0.5，线性插值确保平滑过渡。</p>
+<ol start="2">
+<li><strong>低秩分解</strong>：将BN参数分解为共享基础和宽度特定偏移
+   γ^(α_i) = γ_base + Δγ^(α_i)</li>
+</ol>
+<p>其中Δγ^(α_i) = U_i · V，U_i ∈ R^{C_l×r}，V ∈ R^r，r &lt;&lt; C_l</p>
+<ol start="3">
+<li><strong>条件BN</strong>：使用小型网络生成BN参数
+   (γ^(α_i), β^(α_i)) = g_θ(α_i)</li>
+</ol>
+<p>生成器g_θ通常是2-3层MLP，参数量约1K-5K。</p>
+<p><strong>训练稳定性考虑</strong></p>
+<p>Switchable BN训练中的关键问题：</p>
+<ol>
+<li><strong>统计量初始化</strong>：新宽度的BN统计量可从最近宽度插值
+   μ^(α_new) = (1-w)μ^(α_lower) + w·μ^(α_upper)</li>
+</ol>
+<p>其中w = (α_new - α_lower)/(α_upper - α_lower)</p>
+<ol start="2">
+<li><strong>动量调度</strong>：早期使用较大动量快速收敛统计量
+   m(t) = m_init + (m_final - m_init) × (1 - e^(-t/τ))</li>
+</ol>
+<p>典型设置：m_init=0.5, m_final=0.1, τ=10 epochs</p>
+<ol start="3">
+<li><strong>梯度缩放</strong>：平衡不同宽度的梯度贡献
+   ∇_θ L^(α_i) ← ∇_θ L^(α_i) / √(α_i)</li>
+</ol>
+<p>这补偿了窄网络较小的激活值导致的梯度减小。</p>
+<p><strong>实际实现细节</strong></p>
+<p>在PyTorch中，Switchable BN可通过维护多组running_mean和running_var实现：</p>
+<pre class="codehilite"><code>self.bn_dict = nn.ModuleDict({
+    str(alpha): nn.BatchNorm2d(int(alpha * channels))
+    for alpha in alphas
+})
+</code></pre>
+
+<p>推理时根据当前宽度选择对应的BN层，训练时需要确保只更新当前宽度的统计量。</p>
+<h3 id="1113">11.1.3 训练策略：三明治规则与渐进收缩</h3>
+<p><strong>三明治规则（Sandwich Rule）</strong></p>
+<p>S-Net的训练采用"三明治规则"：在每个训练步骤中，同时训练最小宽度、最大宽度和若干中间宽度。这种策略确保了网络在极端情况下的性能，同时通过中间宽度的训练保证了平滑的性能变化。</p>
+<p>训练损失函数为：</p>
+<p>L_sandwich = L(α_min) + L(α_max) + Σ_(i∈S) L(α_i)</p>
+<p>其中S是随机采样的中间宽度集合。</p>
+<p><strong>三明治规则的理论分析</strong></p>
+<p>三明治规则的有效性可以从优化角度理解。考虑参数θ的梯度：</p>
+<p>∇<em>θ L_sandwich = ∇_θ L(α_min) + ∇_θ L(α_max) + Σ</em>(i∈S) ∇_θ L(α_i)</p>
+<p>这确保了：</p>
+<ol>
+<li><strong>边界性能保证</strong>：最小和最大宽度的显式优化避免了性能退化</li>
+<li><strong>梯度覆盖</strong>：不同宽度的梯度方向互补，提高参数利用率</li>
+<li><strong>插值平滑性</strong>：中间宽度的训练使性能曲线更平滑</li>
+</ol>
+<p><strong>梯度冲突分析</strong></p>
+<p>不同宽度的梯度可能存在冲突。定义梯度相似度：</p>
+<p>cos(∇_θ L^(α_i), ∇_θ L^(α_j)) = (∇_θ L^(α_i) · ∇_θ L^(α_j))/(||∇_θ L^(α_i)|| · ||∇_θ L^(α_j)||)</p>
+<p>实验表明：</p>
+<ul>
+<li>相邻宽度（如0.5和0.75）：cos值通常 &gt; 0.7</li>
+<li>极端宽度（如0.25和1.0）：cos值可能 &lt; 0.3</li>
+</ul>
+<p>这说明极端宽度间确实存在优化冲突，需要权衡。</p>
+<p><strong>采样策略优化</strong></p>
+<p>中间宽度的采样策略影响训练效率：</p>
+<ol>
+<li>
+<p><strong>均匀采样</strong>：P(α_i) = 1/|α|
+   简单但可能浪费计算在已收敛的宽度上</p>
+</li>
+<li>
+<p><strong>重要性采样</strong>：P(α_i) ∝ exp(-|Acc(α_i) - Acc_target|/T)
+   集中训练接近目标精度的宽度，T控制集中程度</p>
+</li>
+<li>
+<p><strong>课程采样</strong>：随训练进程调整采样分布
+   P(α_i|t) = softmax(w(t) · [α_1, ..., α_k])
+   其中w(t) = 1 + (k-1)·exp(-t/τ)，从偏好大宽度逐渐过渡到均匀</p>
+</li>
+</ol>
+<p><strong>实例：ImageNet上的采样策略对比</strong></p>
+<p>在ResNet-50的训练中（300 epochs）：</p>
+<ul>
+<li>均匀采样：Top-1 Acc差异 &lt; 0.5% across widths</li>
+<li>重要性采样：训练时间减少15%，精度相当</li>
+<li>课程采样：收敛速度提升20%，最终精度提升0.3%</li>
+</ul>
+<p><strong>渐进收缩训练（Progressive Shrinking）</strong></p>
+<p>另一种有效的训练策略是渐进收缩：首先训练完整宽度的网络，然后逐步引入更窄的宽度配置。这种方法利用了知识蒸馏的思想，让窄网络从宽网络学习。</p>
+<p>训练过程分为多个阶段：</p>
+<ul>
+<li>阶段1：仅训练α = 1.0（100 epochs）</li>
+<li>阶段2：联合训练α = {0.75, 1.0}（50 epochs）</li>
+<li>阶段3：联合训练α = {0.5, 0.75, 1.0}（50 epochs）</li>
+<li>阶段4：联合训练所有宽度配置（100 epochs）</li>
+</ul>
+<p>每个阶段的损失函数包含蒸馏项：</p>
+<p>L_stage = Σ_i L_CE(y^(α_i), y_true) + λ Σ_i KL(y^(α_i) || y^(α_max))</p>
+<p>其中KL表示KL散度，用于让窄网络模仿宽网络的输出分布。</p>
+<p><strong>知识传递的数学分析</strong></p>
+<p>蒸馏的有效性可以通过信息论解释。定义宽网络包含的"知识"为其输出分布的熵：</p>
+<p>H(y^(α_max)) = -Σ_c p_c^(α_max) log p_c^(α_max)</p>
+<p>通过最小化KL散度，窄网络学习的信息量为：</p>
+<p>I_transfer = H(y^(α_i)) - KL(y^(α_i) || y^(α_max))</p>
+<p>理想情况下，I_transfer ≈ H(y^(α_max))，表示知识完全传递。</p>
+<p><strong>蒸馏温度调节</strong></p>
+<p>在知识蒸馏中，温度参数T控制软标签的平滑程度：</p>
+<p>p_i = exp(z_i/T) / Σ_j exp(z_j/T)</p>
+<p>对于不同宽度比例，最优温度不同：</p>
+<ul>
+<li>窄网络（α &lt; 0.5）：使用较高温度T ∈ [5, 10]</li>
+<li>中等网络（0.5 ≤ α &lt; 0.75）：T ∈ [3, 5]</li>
+<li>宽网络（α ≥ 0.75）：T ∈ [1, 3]</li>
+</ul>
+<p><strong>温度选择的理论依据</strong></p>
+<p>最优温度与网络容量比相关：</p>
+<p>T_opt ≈ T_0 · (C_teacher/C_student)^β</p>
+<p>其中T_0是基准温度，β ≈ 0.5。对于α=0.25的学生网络：
+T_opt ≈ 3 × (1.0/0.25)^0.5 ≈ 6</p>
+<p>这与经验观察一致。</p>
+<p><strong>训练技巧与超参数设置</strong></p>
+<ol>
+<li><strong>学习率调度</strong>：不同宽度使用独立学习率
+   lr^(α_i) = lr_base × √(α_i)</li>
+</ol>
+<p>理由：窄网络的有效参数数较少，需要更小的学习率避免过拟合</p>
+<ol start="2">
+<li><strong>批大小调整</strong>：保持每个宽度的有效批大小一致
+   batch_size^(α_i) = batch_size_base / |α_active|</li>
+</ol>
+<p>例如：base=256, 4个宽度同时训练时每个宽度batch_size=64</p>
+<ol start="3">
+<li><strong>正则化强度</strong>：窄网络需要更强的正则化
+   weight_decay^(α_i) = wd_base / α_i</li>
+</ol>
+<p>dropout_rate^(α_i) = drop_base + (1-α_i) × 0.1</p>
+<ol start="4">
+<li><strong>训练周期分配</strong>：根据宽度复杂度分配训练时间
+   epochs^(α_i) = epochs_base × (2 - α_i)</li>
+</ol>
+<p>窄网络需要更多训练来补偿容量不足</p>
+<p><strong>收敛性保证</strong></p>
+<p>在适当条件下，三明治规则训练可以保证收敛。设L_i = L(α_i)为凸函数，学习率η满足：</p>
+<p>η &lt; 2/(Σ_i L_i^max)</p>
+<p>其中L_i^max是L_i的Lipschitz常数。则训练损失单调递减：</p>
+<p>L^(t+1) ≤ L^(t) - η/2 · ||∇L^(t)||²</p>
+<h3 id="1114">11.1.4 宽度选择的优化准则</h3>
+<p>在推理时，如何选择合适的网络宽度是一个重要问题。常见的准则包括：</p>
+<ol>
+<li><strong>精度约束下的效率最大化</strong></li>
+</ol>
+<p>给定精度阈值τ，选择满足精度要求的最小宽度：</p>
+<p>α* = min{α_i : Acc(α_i) ≥ τ}</p>
+<p>实际部署中，考虑精度的统计特性：</p>
+<p>α* = min{α_i : P(Acc(α_i) ≥ τ) ≥ 1-δ}</p>
+<p>其中δ是失败概率容忍度。</p>
+<ol start="2">
+<li><strong>延迟约束下的精度最大化</strong></li>
+</ol>
+<p>给定延迟预算T，选择在预算内的最大宽度：</p>
+<p>α* = max{α_i : Latency(α_i) ≤ T}</p>
+<p>考虑延迟的变异性：</p>
+<p>α* = max{α_i : P95(Latency(α_i)) ≤ T}</p>
+<p>其中P95表示95百分位延迟。</p>
+<ol start="3">
+<li><strong>动态宽度选择</strong></li>
+</ol>
+<p>根据输入的复杂度动态选择宽度。定义复杂度评分函数f(x)，然后：</p>
+<p>α(x) = α_min + (α_max - α_min) · σ(f(x))</p>
+<p>其中σ是sigmoid函数，将复杂度映射到宽度选择。</p>
+<p><strong>复杂度评估方法</strong></p>
+<p>输入复杂度f(x)的计算方法：</p>
+<ol>
+<li>
+<p><strong>基于熵的复杂度</strong>：
+   f_entropy(x) = -Σ_i p_i log p_i
+   其中p_i是输入x的特征直方图</p>
+</li>
+<li>
+<p><strong>基于梯度的复杂度</strong>：
+   f_gradient(x) = ||∇_x L(x)||_2
+   使用小型代理网络估计</p>
+</li>
+<li>
+<p><strong>基于频谱的复杂度</strong>：
+   f_spectrum(x) = Σ_k λ_k / λ_1
+   其中λ_k是x的奇异值</p>
+</li>
+<li>
+<p><strong>多目标优化准则</strong></p>
+</li>
+</ol>
+<p>实际应用中需要平衡多个目标：</p>
+<p>α* = argmin_α [w_1·Latency(α) + w_2·Energy(α) - w_3·Acc(α)]</p>
+<p>使用Pareto优化找到非支配解集：</p>
+<p>Pareto(α) = {α_i | ¬∃α_j : α_j ≺ α_i}</p>
+<p>其中α_j ≺ α_i表示α_j在所有目标上都不差于α_i，且至少在一个目标上更优。</p>
+<ol start="5">
+<li><strong>强化学习宽度选择</strong></li>
+</ol>
+<p>训练一个策略网络π(α|x)选择宽度：</p>
+<p>π_θ(α|x) = softmax(f_θ(x))</p>
+<p>奖励函数结合精度和效率：</p>
+<p>R(x, α) = Acc(x, α) - β·Cost(x, α)</p>
+<p>使用PPO或A3C算法优化策略。</p>
+<ol start="6">
+<li><strong>贝叶斯宽度优化</strong></li>
+</ol>
+<p>建模宽度选择的不确定性：</p>
+<p>P(α|x, D) ∝ P(y|x, α)P(α|D)</p>
+<p>其中D是历史数据，使用高斯过程或贝叶斯神经网络建模。</p>
+<p><strong>实际部署考虑</strong></p>
+<ol>
+<li>
+<p><strong>预计算查找表</strong>：离线评估不同场景的最优宽度
+   LUT[scenario] → α_optimal</p>
+</li>
+<li>
+<p><strong>自适应阈值调整</strong>：根据系统负载动态调整
+   τ(t) = τ_base × (1 + k·load(t))</p>
+</li>
+<li>
+<p><strong>分层决策</strong>：先用轻量级分类器快速决策
+   if classifier(x) == "simple":
+       return α_min
+   else:
+       return detailed_selection(x)</p>
+</li>
+</ol>
+<h2 id="112">11.2 弹性宽度网络设计</h2>
+<h3 id="1121">11.2.1 通道重要性评估方法</h3>
+<p>弹性宽度网络的核心在于识别哪些通道对模型性能贡献最大。这不仅影响剪枝决策，还决定了在不同宽度配置下应该保留哪些通道。主要的评估方法包括：</p>
+<ol>
+<li><strong>基于梯度的重要性评分</strong></li>
+</ol>
+<p>Taylor展开提供了一种理论基础扎实的重要性评估方法。对于通道c，其重要性可以通过损失函数对该通道输出的一阶导数近似：</p>
+<p>I_c = |∂L/∂z_c| · |z_c|</p>
+<p>其中z_c是通道c的激活值。这个公式结合了梯度幅度和激活幅度，反映了该通道对损失函数的影响。</p>
+<p><strong>Taylor展开的高阶近似</strong></p>
+<p>考虑二阶Taylor展开获得更精确的重要性估计：</p>
+<p>ΔL_c = (∂L/∂z_c)·Δz_c + (1/2)·(∂²L/∂z_c²)·(Δz_c)²</p>
+<p>当移除通道c时，Δz_c = -z_c，因此：</p>
+<p>I_c = |∂L/∂z_c·z_c| + (1/2)|∂²L/∂z_c²·z_c²|</p>
+<p>第二项通常通过有限差分近似：</p>
+<p>∂²L/∂z_c² ≈ (∂L/∂z_c|<em z_c-ε="z_c-ε">{z_c+ε} - ∂L/∂z_c|</em>)/(2ε)</p>
+<ol start="2">
+<li><strong>基于Fisher信息的重要性</strong></li>
+</ol>
+<p>Fisher信息矩阵提供了参数重要性的二阶信息。对于通道c的参数θ_c，其重要性为：</p>
+<p>I_c = θ_c^T F_c θ_c</p>
+<p>其中F_c是对应于通道c参数的Fisher信息矩阵块：</p>
+<p>F_c = E[∇_θ_c log p(y|x,θ) · ∇_θ_c log p(y|x,θ)^T]</p>
+<p>实践中，通常使用对角近似：</p>
+<p>I_c ≈ Σ_i (θ_c,i)² · E[(∂log p/∂θ_c,i)²]</p>
+<p><strong>经验Fisher信息矩阵（EFM）</strong></p>
+<p>使用训练数据的经验估计：</p>
+<p>F̂_c = (1/N) Σ_n ∇_θ_c log p(y_n|x_n,θ) · ∇_θ_c log p(y_n|x_n,θ)^T</p>
+<p>为提高计算效率，使用Kronecker分解：</p>
+<p>F̂_c ≈ F̂_input ⊗ F̂_output</p>
+<p>其中F̂_input和F̂_output分别是输入和输出的Fisher信息。</p>
+<ol start="3">
+<li><strong>基于激活统计的重要性</strong></li>
+</ol>
+<p>一种简单但有效的方法是基于激活的统计特性：</p>
+<p>I_c = E[|z_c|] / (Var[z_c] + ε)</p>
+<p>这个指标倾向于选择激活值大且稳定的通道。</p>
+<p><strong>增强的统计指标</strong></p>
+<ol>
+<li>
+<p><strong>峰度调整的重要性</strong>：
+   I_c = E[|z_c|] × (1 + λ·Kurt[z_c])
+   其中Kurt[z_c]是峰度，捕获激活分布的尾部特性</p>
+</li>
+<li>
+<p><strong>互信息重要性</strong>：
+   I_c = MI(z_c; y) = Σ_y p(y) KL(p(z_c|y) || p(z_c))
+   衡量通道激活与输出标签的相关性</p>
+</li>
+<li>
+<p><strong>条件熵重要性</strong>：
+   I_c = H(y) - H(y|z_c)
+   表示通道c减少的输出不确定性</p>
+</li>
+<li>
+<p><strong>基于注意力的重要性</strong></p>
+</li>
+</ol>
+<p>利用自注意力机制评估通道间的相互依赖：</p>
+<p>A = softmax(Q·K^T/√d)
+I_c = Σ_i A_{ic} + Σ_j A_{cj}</p>
+<p>其中A_{ic}表示其他通道对通道c的注意力权重。</p>
+<ol start="5">
+<li><strong>学习式重要性预测器</strong></li>
+</ol>
+<p>训练专门的网络预测通道重要性：</p>
+<p>I = g_φ(Z)</p>
+<p>其中Z是层的激活，g_φ是轻量级预测网络。训练目标：</p>
+<p>L_pred = ||I - I_true||² + λ·||I||_1</p>
+<p>其中I_true通过暴力搜索或敏感度分析获得。</p>
+<h3 id="1122">11.2.2 宽度配置的搜索空间</h3>
+<p>设计有效的宽度配置搜索空间需要平衡灵活性和训练复杂度。常见的搜索空间设计包括：</p>
+<ol>
+<li><strong>均匀宽度配置</strong></li>
+</ol>
+<p>所有层使用相同的宽度比例：</p>
+<p>W = {α · C_l | α ∈ A, l = 1,...,L}</p>
+<p>其中A = {0.25, 0.5, 0.75, 1.0}是预定义的宽度比例集合。</p>
+<ol start="2">
+<li><strong>层级独立配置</strong></li>
+</ol>
+<p>每层可以独立选择宽度：</p>
+<p>W = {(α_1·C_1, α_2·C_2, ..., α_L·C_L) | α_l ∈ A}</p>
+<p>搜索空间大小为|A|^L，需要使用搜索算法如进化算法或强化学习。</p>
+<ol start="3">
+<li><strong>分组配置</strong></li>
+</ol>
+<p>将网络分为若干组（如按阶段或按残差块），组内层使用相同宽度：</p>
+<p>W = {(α_g1·C_g1, α_g2·C_g2, ..., α_gK·C_gK) | α_gi ∈ A}</p>
+<p>这种方法在搜索空间大小和灵活性之间取得平衡。</p>
+<h3 id="1123">11.2.3 多宽度联合训练技术</h3>
+<ol>
+<li><strong>知识蒸馏增强训练</strong></li>
+</ol>
+<p>在多宽度训练中，可以利用宽网络指导窄网络的学习：</p>
+<p>L_distill = Σ_i CE(y_i, y_true) + λ_KD Σ_i&lt;j KL(y_i || y_j)</p>
+<p>其中i &lt; j表示宽度α_i &lt; α_j，宽网络的输出作为窄网络的软标签。</p>
+<ol start="2">
+<li><strong>渐进式宽度采样</strong></li>
+</ol>
+<p>训练初期更多采样宽网络，后期增加窄网络的采样概率：</p>
+<p>P(α_i | epoch) = softmax(β(epoch) · score(α_i))</p>
+<p>其中β(epoch)是随训练进程增加的温度参数，score(α_i)反映宽度α_i的优先级。</p>
+<ol start="3">
+<li><strong>对抗训练策略</strong></li>
+</ol>
+<p>引入对抗性扰动提高不同宽度网络的鲁棒性：</p>
+<p>L_adv = max_||δ||≤ε Σ_i L(f(x+δ; α_i), y)</p>
+<p>这确保了窄网络在面对扰动时仍能保持性能。</p>
+<h3 id="1124">11.2.4 推理时宽度选择策略</h3>
+<ol>
+<li><strong>基于置信度的动态选择</strong></li>
+</ol>
+<p>使用小宽度网络的预测置信度决定是否需要更大的网络：</p>
+<pre class="codehilite"><code>α = α_min
+for i in range(len(A)):
+    conf = max(softmax(f(x; α)))
+    if conf &gt; threshold:
+        break
+    α = A[i+1]
+</code></pre>
+
+<ol start="2">
+<li><strong>级联式推理</strong></li>
+</ol>
+<p>逐步增加网络宽度，直到预测稳定：</p>
+<p>convergence = |f(x; α_i) - f(x; α_{i-1})| &lt; ε</p>
+<ol start="3">
+<li><strong>基于资源的自适应选择</strong></li>
+</ol>
+<p>根据当前系统资源动态调整：</p>
+<p>α* = max{α_i : Memory(α_i) ≤ M_available ∧ Power(α_i) ≤ P_budget}</p>
+<p>其中Memory和Power是资源消耗的预测函数。</p>
+<h2 id="113-early-exit">11.3 早退机制（Early Exit）</h2>
+<h3 id="1131">11.3.1 早退网络的数学建模</h3>
+<p>早退网络在模型的不同深度设置多个出口，允许简单样本在浅层就得到预测结果，从而大幅减少平均计算量。这种机制特别适合边缘设备上的实时推理场景。</p>
+<p><strong>基本架构</strong></p>
+<p>设神经网络有L层，在第l_1, l_2, ..., l_K层设置K个早退出口，其中l_K = L。每个出口包含一个分类器g_i，网络的前向传播可以表示为：</p>
+<p>h_0 = x
+h_l = f_l(h_{l-1}), l = 1, ..., L
+y_i = g_i(h_{l_i}), i = 1, ..., K</p>
+<p><strong>早退决策函数</strong></p>
+<p>关键在于设计合适的退出决策函数。常见的方法基于预测的置信度：</p>
+<p>exit_i = 1{max(softmax(y_i)) &gt; τ_i}</p>
+<p>其中τ_i是第i个出口的置信度阈值。</p>
+<p><strong>计算节省分析</strong></p>
+<p>假设样本在第i个出口退出的概率为p_i，平均计算成本为：</p>
+<p>C_avg = Σ_{i=1}^K p_i · C_i</p>
+<p>其中C_i是执行到第i个出口的计算成本。相对于完整网络的加速比为：</p>
+<p>Speedup = C_L / C_avg = C_L / (Σ_{i=1}^K p_i · C_i)</p>
+<h3 id="1132">11.3.2 置信度阈值设计</h3>
+<ol>
+<li><strong>固定阈值策略</strong></li>
+</ol>
+<p>最简单的方法是为所有出口设置相同的阈值：</p>
+<p>τ_i = τ, ∀i</p>
+<p>这种方法简单但可能不够优化，因为不同深度的网络置信度分布差异较大。</p>
+<ol start="2">
+<li><strong>自适应阈值</strong></li>
+</ol>
+<p>根据每个出口的置信度分布设置阈值：</p>
+<p>τ_i = μ_i + k · σ_i</p>
+<p>其中μ_i和σ_i是第i个出口在验证集上的置信度均值和标准差，k是控制参数。</p>
+<ol start="3">
+<li><strong>基于成本的阈值优化</strong></li>
+</ol>
+<p>考虑计算成本和精度的权衡，通过优化问题确定阈值：</p>
+<p>min_{τ_1,...,τ_K} Σ_{i=1}^K p_i(τ_i) · C_i
+s.t. Acc(τ_1,...,τ_K) ≥ Acc_target</p>
+<p>可以使用动态规划或贪婪算法求解。</p>
+<ol start="4">
+<li><strong>熵基准的退出策略</strong></li>
+</ol>
+<p>使用预测分布的熵作为不确定性度量：</p>
+<p>H(y_i) = -Σ_c p_c log p_c</p>
+<p>exit_i = 1{H(y_i) &lt; η_i}</p>
+<p>低熵表示高置信度，适合退出。</p>
+<h3 id="1133">11.3.3 多出口网络训练方法</h3>
+<ol>
+<li><strong>联合训练损失</strong></li>
+</ol>
+<p>所有出口同时训练，总损失为各出口损失的加权和：</p>
+<p>L_total = Σ_{i=1}^K w_i · L_i(y_i, y_true)</p>
+<p>权重w_i通常随深度递增，确保深层网络的性能。</p>
+<ol start="2">
+<li><strong>知识蒸馏训练</strong></li>
+</ol>
+<p>使用最后一个出口（完整网络）的预测作为前面出口的软标签：</p>
+<p>L_i = (1-α) · CE(y_i, y_true) + α · KL(y_i || y_K)</p>
+<p>这帮助浅层出口学习深层网络的知识。</p>
+<ol start="3">
+<li><strong>梯度平衡技术</strong></li>
+</ol>
+<p>不同出口的梯度量级可能差异很大，使用梯度归一化：</p>
+<p>∇θ_l ← ∇θ_l / ||∇θ_l||_2</p>
+<p>或者使用GradNorm等自适应方法平衡多任务学习。</p>
+<ol start="4">
+<li><strong>逐层增量训练</strong></li>
+</ol>
+<p>先训练完整网络，然后逐步添加早退出口：</p>
+<ul>
+<li>Step 1: 训练基础网络f_1, ..., f_L和g_K</li>
+<li>Step 2: 固定网络，训练g_{K-1}</li>
+<li>Step 3: 联合微调所有参数</li>
+<li>重复直到所有出口训练完成</li>
+</ul>
+<h3 id="1134-">11.3.4 延迟-精度权衡分析</h3>
+<ol>
+<li><strong>Pareto前沿分析</strong></li>
+</ol>
+<p>通过调整阈值τ = (τ_1, ..., τ_K)，可以得到延迟-精度的Pareto前沿：</p>
+<p>Pareto = {(Latency(τ), Accuracy(τ)) | τ ∈ T}</p>
+<p>其中T是阈值空间。最优配置在Pareto前沿上。</p>
+<ol start="2">
+<li><strong>预算约束优化</strong></li>
+</ol>
+<p>给定延迟预算B，最大化精度：</p>
+<p>max_τ Accuracy(τ)
+s.t. Latency(τ) ≤ B</p>
+<p>使用拉格朗日方法：</p>
+<p>L(τ, λ) = Accuracy(τ) - λ(Latency(τ) - B)</p>
+<ol start="3">
+<li><strong>动态预算分配</strong></li>
+</ol>
+<p>根据系统负载动态调整延迟预算：</p>
+<p>B(t) = B_base · (1 + β · (Load_target - Load(t)))</p>
+<p>高负载时降低预算，加速推理；低负载时提高预算，改善精度。</p>
+<ol start="4">
+<li><strong>样本级别的自适应</strong></li>
+</ol>
+<p>不同样本的复杂度不同，可以基于输入特征预测合适的退出点：</p>
+<p>l_exit = f_policy(x)</p>
+<p>其中f_policy是一个轻量级网络，预测每个样本的最优退出层。</p>
+<h2 id="114-tokentome">11.4 Token剪枝与合并（ToMe）</h2>
+<h3 id="1141-token">11.4.1 Token重要性评分机制</h3>
+<p>在Transformer架构中，并非所有token都对最终预测贡献相同。Token剪枝通过识别和移除不重要的token来减少计算量，这在处理长序列时尤其重要。</p>
+<ol>
+<li><strong>基于注意力的重要性评分</strong></li>
+</ol>
+<p>利用注意力权重评估token重要性：</p>
+<p>I_i = Σ_{h=1}^H Σ_{j=1}^N A_{ij}^{(h)}</p>
+<p>其中A_{ij}^{(h)}是第h个注意力头中token j对token i的注意力权重。高分表示该token被其他token频繁关注。</p>
+<ol start="2">
+<li><strong>基于梯度的重要性</strong></li>
+</ol>
+<p>通过计算损失对token嵌入的梯度：</p>
+<p>I_i = ||∂L/∂x_i||_2</p>
+<p>这反映了移除该token对模型输出的影响。</p>
+<ol start="3">
+<li><strong>学习式重要性预测</strong></li>
+</ol>
+<p>训练一个轻量级网络预测token重要性：</p>
+<p>s = f_score(X) ∈ R^N</p>
+<p>其中X ∈ R^{N×d}是token序列，s_i是第i个token的重要性分数。</p>
+<ol start="4">
+<li><strong>基于相似度的冗余检测</strong></li>
+</ol>
+<p>计算token之间的余弦相似度，识别冗余token：</p>
+<p>R_{ij} = cos(x_i, x_j) = (x_i · x_j)/(||x_i|| · ||x_j||)</p>
+<p>高相似度的token对可以考虑合并或剪枝。</p>
+<h3 id="1142-token">11.4.2 Token合并的数学原理</h3>
+<p>Token合并（Token Merging, ToMe）通过将相似的token合并来减少序列长度，保留更多信息。</p>
+<ol>
+<li><strong>加权平均合并</strong></li>
+</ol>
+<p>给定要合并的token集合S = {i_1, ..., i_k}，合并后的token为：</p>
+<p>x_merged = Σ_{j∈S} w_j · x_j / Σ_{j∈S} w_j</p>
+<p>权重w_j可以基于重要性分数或注意力权重。</p>
+<ol start="2">
+<li><strong>基于聚类的合并</strong></li>
+</ol>
+<p>使用K-means或层次聚类将token分组：</p>
+<p>min_C Σ_{k=1}^K Σ_{x_i∈C_k} ||x_i - μ_k||²</p>
+<p>其中C_k是第k个簇，μ_k是簇中心。每个簇合并为一个token。</p>
+<ol start="3">
+<li><strong>双线性池化合并</strong></li>
+</ol>
+<p>对于token对(x_i, x_j)，使用双线性池化：</p>
+<p>x_merged = W(x_i ⊗ x_j) + b</p>
+<p>其中⊗表示外积，W和b是可学习参数。</p>
+<ol start="4">
+<li><strong>注意力引导的合并</strong></li>
+</ol>
+<p>利用自注意力矩阵确定合并策略：</p>
+<p>M = A^T A</p>
+<p>其中M_{ij}表示token i和j的相关性。选择M值最大的token对进行合并。</p>
+<h3 id="1143-token">11.4.3 动态Token剪枝策略</h3>
+<ol>
+<li><strong>固定比例剪枝</strong></li>
+</ol>
+<p>保留重要性最高的k个token：</p>
+<p>X_pruned = TopK(X, I, k)</p>
+<p>其中k = ⌊r · N⌋，r是保留比例。</p>
+<ol start="2">
+<li><strong>自适应阈值剪枝</strong></li>
+</ol>
+<p>基于重要性分布动态确定阈值：</p>
+<p>τ = percentile(I, p)
+X_pruned = {x_i | I_i &gt; τ}</p>
+<ol start="3">
+<li><strong>层级渐进剪枝</strong></li>
+</ol>
+<p>在不同层使用不同的剪枝率：</p>
+<p>r_l = r_min + (r_max - r_min) · (l/L)^γ</p>
+<p>深层使用更激进的剪枝，因为特征已经更加抽象。</p>
+<ol start="4">
+<li><strong>任务相关的动态剪枝</strong></li>
+</ol>
+<p>根据下游任务调整剪枝策略：</p>
+<ul>
+<li>分类任务：保留[CLS] token周围的重要token</li>
+<li>生成任务：保留最近的k个token（滑动窗口）</li>
+<li>问答任务：保留问题相关的token</li>
+</ul>
+<h3 id="1144-llmvlm">11.4.4 在LLM/VLM中的应用</h3>
+<ol>
+<li><strong>LLM中的Token剪枝</strong></li>
+</ol>
+<p>在大语言模型中，Token剪枝主要应用于：</p>
+<ul>
+<li><strong>Attention计算优化</strong>：剪枝KV cache中的token</li>
+</ul>
+<p>KV_pruned = PruneTokens(KV, importance_scores)</p>
+<ul>
+<li><strong>长文本处理</strong>：动态调整上下文窗口</li>
+</ul>
+<p>context_window = min(max_length, important_tokens + buffer)</p>
+<ol start="2">
+<li><strong>VLM中的跨模态Token管理</strong></li>
+</ol>
+<p>视觉语言模型需要平衡视觉和文本token：</p>
+<ul>
+<li><strong>视觉Token压缩</strong>：</li>
+</ul>
+<p>N_visual = f_allocate(task_type) · N_total</p>
+<p>根据任务类型分配视觉token预算。</p>
+<ul>
+<li><strong>动态分辨率调整</strong>：</li>
+</ul>
+<p>resolution = base_res · sqrt(token_budget / base_tokens)</p>
+<ol start="3">
+<li><strong>流式推理中的Token管理</strong></li>
+</ol>
+<p>在实时场景中，需要在线决策token取舍：</p>
+<pre class="codehilite"><code>buffer = PriorityQueue(capacity=max_tokens)
+for new_token in stream:
+    importance = compute_importance(new_token)
+    if buffer.full():
+        if importance &gt; buffer.min_importance():
+            buffer.pop_min()
+            buffer.push(new_token, importance)
+    else:
+        buffer.push(new_token, importance)
+</code></pre>
+
+<ol start="4">
+<li><strong>多轮对话中的历史压缩</strong></li>
+</ol>
+<p>保留对话历史的关键信息：</p>
+<ul>
+<li><strong>摘要式压缩</strong>：定期生成历史摘要token</li>
+<li><strong>重要性衰减</strong>：I_t = I_0 · exp(-λ·t)</li>
+<li><strong>主题聚类</strong>：保留每个主题的代表性token</li>
+</ul>
+<h2 id="_1">本章小结</h2>
+<p>动态网络架构为边缘AI推理提供了灵活且高效的解决方案。通过本章的学习，我们深入理解了四种关键技术：</p>
+<ol>
+<li>
+<p><strong>Slimmable Neural Networks</strong>：通过可切换批归一化和多宽度训练，实现了单一模型适应多种资源约束的能力。三明治规则和渐进收缩训练策略确保了不同宽度下的性能。</p>
+</li>
+<li>
+<p><strong>弹性宽度网络设计</strong>：基于通道重要性评估，设计了灵活的宽度配置搜索空间。多宽度联合训练技术和动态宽度选择策略使得网络能够根据实际需求调整计算量。</p>
+</li>
+<li>
+<p><strong>早退机制</strong>：通过在网络不同深度设置多个出口，实现了样本级别的自适应计算。置信度阈值设计和多出口训练方法是确保早退网络性能的关键。</p>
+</li>
+<li>
+<p><strong>Token剪枝与合并</strong>：针对Transformer架构，通过评估token重要性并进行剪枝或合并，有效减少了序列长度和计算量。这在处理长文本和多模态输入时尤为重要。</p>
+</li>
+</ol>
+<p>这些技术的核心思想是<strong>计算的自适应性</strong>——根据输入复杂度、资源约束和精度要求动态调整网络结构。在实际部署中，这些技术可以组合使用，例如：</p>
+<ul>
+<li>在VLM中同时使用Token剪枝和早退机制</li>
+<li>结合Slimmable网络和动态Token管理优化长序列处理</li>
+<li>使用弹性宽度设计增强早退网络的灵活性</li>
+</ul>
+<p>关键公式回顾：</p>
+<ul>
+<li>Slimmable网络宽度：C_l^(α_i) = ⌊α_i · C_l⌋</li>
+<li>早退加速比：Speedup = C_L / (Σ_{i=1}^K p_i · C_i)</li>
+<li>Token重要性：I_i = Σ_{h=1}^H Σ_{j=1}^N A_{ij}^{(h)}</li>
+<li>合并策略：x_merged = Σ_{j∈S} w_j · x_j / Σ_{j∈S} w_j</li>
+</ul>
+<h2 id="_2">练习题</h2>
+<h3 id="_3">基础题</h3>
+<ol>
+<li><strong>Slimmable Networks理解</strong></li>
+</ol>
+<p>解释为什么Slimmable Neural Networks需要使用Switchable BN而不能使用普通的批归一化。如果强制使用相同的BN参数会发生什么？</p>
+<p><em>Hint: 考虑不同宽度网络的特征分布差异</em></p>
+<ol start="2">
+<li><strong>早退机制计算</strong></li>
+</ol>
+<p>假设一个5层网络在第2、3、5层设置了早退出口，各层的计算成本为[10, 20, 30, 40, 50] FLOPs，样本在各出口的退出概率为[0.3, 0.5, 0.2]。计算平均计算成本和加速比。</p>
+<p><em>Hint: 使用公式C_avg = Σ p_i · C_i</em></p>
+<ol start="3">
+<li><strong>Token重要性评分</strong></li>
+</ol>
+<p>给定一个4×4的注意力矩阵A，计算每个token基于注意力的重要性分数：</p>
+<pre class="codehilite"><code>A = [[0.4, 0.3, 0.2, 0.1],
+     [0.1, 0.5, 0.3, 0.1],
+     [0.2, 0.2, 0.4, 0.2],
+     [0.1, 0.1, 0.2, 0.6]]
+</code></pre>
+
+<p><em>Hint: 对每个token，累加所有其他token对它的注意力权重</em></p>
+<ol start="4">
+<li><strong>宽度配置设计</strong></li>
+</ol>
+<p>设计一个4层网络的宽度配置方案，原始通道数为[64, 128, 256, 512]，要求支持25%、50%、75%、100%四种宽度。计算每种配置的通道数。</p>
+<p><em>Hint: 使用floor函数确保通道数为整数</em></p>
+<h3 id="_4">挑战题</h3>
+<ol start="5">
+<li><strong>多目标优化问题</strong></li>
+</ol>
+<p>在早退网络中，如何设计一个优化算法同时考虑：(a)平均延迟不超过原网络的50%，(b)准确率下降不超过2%，(c)最大化能效(准确率/能耗)？请给出优化问题的数学形式。</p>
+<p><em>Hint: 考虑使用多目标优化或约束优化方法</em></p>
+<ol start="6">
+<li><strong>Token合并策略分析</strong></li>
+</ol>
+<p>比较基于聚类的Token合并和基于注意力的Token合并在以下场景的优劣：(a)处理重复性文本，(b)处理技术文档，(c)多轮对话历史压缩。设计一个自适应策略根据输入特征选择合并方法。</p>
+<p><em>Hint: 分析不同场景下token的分布特征</em></p>
+<ol start="7">
+<li><strong>动态网络架构组合</strong></li>
+</ol>
+<p>设计一个结合Slimmable网络、早退机制和Token剪枝的统一框架。如何协调这三种技术避免冲突？给出训练算法伪代码。</p>
+<p><em>Hint: 考虑分阶段训练或联合优化策略</em></p>
+<ol start="8">
+<li><strong>理论分析题</strong></li>
+</ol>
+<p>证明在满足某些条件下，使用早退机制的期望计算成本严格小于完整网络。这些条件是什么？如何在实践中验证这些条件？</p>
+<p><em>Hint: 使用概率论分析退出概率分布的约束</em></p>
+<details>
+<summary>答案</summary>
+<ol>
+<li>
+<p>Switchable BN是必要的，因为不同宽度的网络具有不同的特征分布。使用相同BN参数会导致归一化不当，严重降低窄网络性能（可能下降20-30%）。每个宽度需要独立统计量以正确归一化特征。</p>
+</li>
+<li>
+<p>C_avg = 0.3×(10+20) + 0.5×(10+20+30) + 0.2×(10+20+30+40+50) = 9 + 30 + 30 = 69 FLOPs
+   加速比 = 150/69 ≈ 2.17</p>
+</li>
+<li>
+<p>I = [0.8, 1.1, 1.1, 1.0]（每个token被其他token关注的总和）</p>
+</li>
+<li>
+<p>25%: [16, 32, 64, 128]
+   50%: [32, 64, 128, 256]<br />
+   75%: [48, 96, 192, 384]
+   100%: [64, 128, 256, 512]</p>
+</li>
+<li>
+<p>优化问题：
+   max_{τ,α} Acc(τ,α)/Energy(τ,α)
+   s.t. Latency(τ,α) ≤ 0.5×Latency_base
+        Acc(τ,α) ≥ 0.98×Acc_base
+   可使用Pareto优化或ε-约束方法求解。</p>
+</li>
+<li>
+<p>聚类合并适合重复性文本（相似token多），注意力合并适合技术文档（保留关键术语）。自适应策略：计算token分布熵，低熵用聚类，高熵用注意力。</p>
+</li>
+<li>
+<p>训练框架：
+   Phase 1: 训练Slimmable基础网络
+   Phase 2: 添加早退分支，冻结主干
+   Phase 3: 引入Token剪枝，联合微调
+   协调关键：共享重要性评分，统一资源分配</p>
+</li>
+<li>
+<p>条件：∃i &lt; K, p_i &gt; 0 且 Σ_{j≤i} p_j &gt; C_i/C_K
+   证明：E[C] = Σp_i·C_i &lt; Σp_i·C_K = C_K
+   验证：统计验证集上的退出分布</p>
+</li>
+</ol>
+</details>
+            </article>
+            
+            <nav class="page-nav"><a href="chapter10.html" class="nav-link prev">← 第10章：稀疏化与参数共享</a><a href="chapter12.html" class="nav-link next">第12章：知识蒸馏 →</a></nav>
+        </main>
+    </div>
+</body>
+</html>
