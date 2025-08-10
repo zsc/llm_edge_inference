@@ -26,7 +26,7 @@ $$\text{Memory}_{KV} = 2 \times 32 \times 32 \times 2048 \times 128 \times 2 = 1
 
 在标准的自注意力计算中，对于位置$i$的查询向量$q_i$，需要与所有之前位置的键向量计算注意力权重：
 
-$$\alpha_{i,j} = \frac{\exp(q_i^T k_j / \sqrt{d})}{{\sum_{t=1}^{i} \exp(q_i^T k_t / \sqrt{d})}}$$
+$$\alpha_{i,j} = \frac{\exp(q_i^T k_j / \sqrt{d})}{\sum_{t=1}^{i} \exp(q_i^T k_t / \sqrt{d})}$$
 
 如果不使用KV Cache，每生成一个新token时，需要重新计算所有历史token的$k_j$和$v_j$，计算复杂度为$O(L \times S^2 \times D)$。而使用KV Cache后，只需计算当前token的KV值，复杂度降为$O(L \times S \times D)$。
 
